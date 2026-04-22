@@ -32,26 +32,31 @@ function getNextMock(lastId) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// FIX: robust loader that handles "script exists but not yet loaded" race condition
+// FIX: use global callback pattern — most reliable on mobile Safari
 function loadGoogleMaps(apiKey) {
   return new Promise((resolve, reject) => {
-    if (window.google?.maps) { resolve(); return; }
+    if (window.google?.maps?.places) { resolve(); return; }
+
+    const callbackName = "__googleMapsReady__";
+    window[callbackName] = () => resolve();
+
     const existing = document.getElementById("gmap-script");
     if (existing) {
-      // Script is in DOM but may not have fired onload yet — poll instead of relying on event
       const poll = setInterval(() => {
-        if (window.google?.maps) { clearInterval(poll); resolve(); }
-      }, 100);
-      setTimeout(() => { clearInterval(poll); reject(new Error("Maps load timeout")); }, 10000);
+        if (window.google?.maps?.places) { clearInterval(poll); resolve(); }
+      }, 150);
+      setTimeout(() => { clearInterval(poll); reject(new Error("Maps timeout")); }, 12000);
       return;
     }
+
     const s = document.createElement("script");
     s.id = "gmap-script";
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=${callbackName}`;
     s.async = true;
-    s.onload = resolve;
-    s.onerror = reject;
+    s.defer = true;
+    s.onerror = () => reject(new Error("Maps failed to load"));
     document.head.appendChild(s);
+    setTimeout(() => reject(new Error("Maps timeout")), 12000);
   });
 }
 
@@ -245,6 +250,30 @@ export default function SpotDrop() {
     };
   }, []);
 
+  // ── Helper to build a spot from a Places result ───────────────────────────
+  const handlePlaceResult = useCallback((place) => {
+    const typeLabel = (place.types || [])
+      .filter(t => !["point_of_interest", "establishment", "food"].includes(t))
+      .slice(0, 2)
+      .map(t => t.replace(/_/g, " "))
+      .join(" • ");
+    const spot = {
+      id: place.place_id,
+      name: place.name,
+      type: typeLabel || "Restaurant",
+      address: place.vicinity,
+      distance: "nearby",
+      emoji: getEmoji(place.types),
+      neighborhood: place.vicinity?.split(",").pop()?.trim() || "NYC",
+      lat: place.geometry.location.lat(),
+      lng: place.geometry.location.lng(),
+    };
+    setDetected(spot);
+    setGpsStatus("done");
+    setSelectedVibe(null);
+    setNote("");
+  }, []);
+
   // ── Real GPS + Places detection ────────────────────────────────────────────
   const detectReal = useCallback(async () => {
     setGpsStatus("locating");
@@ -268,42 +297,33 @@ export default function SpotDrop() {
       await loadGoogleMaps(GOOGLE_API_KEY);
       const service = new window.google.maps.places.PlacesService(document.createElement("div"));
 
-      // FIX: use singular `type` string — array form is deprecated and silently fails
+      // FIX: radius-based search is reliable; rankBy:DISTANCE requires a keyword and hangs without one
       service.nearbySearch({
         location: { lat, lng },
-        rankBy: window.google.maps.places.RankBy.DISTANCE,
+        radius: 150, // 150 meters — close enough to catch what you're walking by
         type: "restaurant",
       }, (results, status) => {
-        if (status === "OK" && results?.length) {
-          const place = results[0];
-          const typeLabel = (place.types || [])
-            .filter(t => !["point_of_interest", "establishment", "food"].includes(t))
-            .slice(0, 2)
-            .map(t => t.replace(/_/g, " "))
-            .join(" • ");
-          const spot = {
-            id: place.place_id,
-            name: place.name,
-            type: typeLabel || "Restaurant",
-            address: place.vicinity,
-            distance: "nearby",
-            emoji: getEmoji(place.types),
-            neighborhood: place.vicinity?.split(",").pop()?.trim() || "NYC",
-            lat: place.geometry.location.lat(),
-            lng: place.geometry.location.lng(),
-          };
-          setDetected(spot);
-          setGpsStatus("done");
-          setSelectedVibe(null);
-          setNote("");
-        } else {
-          setGpsStatus("error");
+        // If no restaurants in 150m, widen to bars/cafes
+        if ((!results?.length || status !== "OK")) {
+          service.nearbySearch({
+            location: { lat, lng },
+            radius: 300,
+            keyword: "bar cafe restaurant",
+          }, (results2, status2) => {
+            if (status2 === "OK" && results2?.length) {
+              handlePlaceResult(results2[0]);
+            } else {
+              setGpsStatus("error");
+            }
+          });
+          return;
         }
+        handlePlaceResult(results[0]);
       });
     } catch (e) {
       setGpsStatus("error");
     }
-  }, []);
+  }, [handlePlaceResult]);
 
   // ── Mock detection ─────────────────────────────────────────────────────────
   const detectMock = useCallback(() => {
