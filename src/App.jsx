@@ -414,10 +414,19 @@ function CandidateStack({ candidates, onPick, onCancel }) {
 export default function SpotDrop() {
   const [screen, setScreen] = useState("home");
   const [detected, setDetected] = useState(null);
-  const [savedSpots, setSavedSpots] = useState([
-    { ...MOCK_SPOTS[1], savedAt: Date.now() - 86400000 * 2, vibe: "💡 Hidden gem", note: "Looked incredible at night" },
-    { ...MOCK_SPOTS[2], savedAt: Date.now() - 86400000 * 5, vibe: "🎶 Lively", note: "" },
-  ]);
+  // FIX: persist saved spots to localStorage so they survive refresh / phone restart
+  const [savedSpots, setSavedSpots] = useState(() => {
+    try {
+      const stored = localStorage.getItem("spotdrop_saved");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      // localStorage unavailable (private browsing, etc.) — fall through to empty
+    }
+    return []; // Start with empty list — no more mock spots
+  });
   const [selectedSpot, setSelectedSpot] = useState(null);
   const [saveAnim, setSaveAnim] = useState(false);
   const [selectedVibe, setSelectedVibe] = useState(null);
@@ -446,6 +455,15 @@ export default function SpotDrop() {
       if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
     };
   }, []);
+
+  // FIX: persist savedSpots to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem("spotdrop_saved", JSON.stringify(savedSpots));
+    } catch (e) {
+      // localStorage full or unavailable — silently fail
+    }
+  }, [savedSpots]);
 
   // ── Helper to build a spot from a Places result ───────────────────────────
   const buildSpot = useCallback((place, userLat, userLng) => {
