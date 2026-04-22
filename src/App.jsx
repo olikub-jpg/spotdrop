@@ -538,6 +538,16 @@ const menuBtn = {
   cursor: "pointer",
 };
 
+// Bottom-sheet action button style
+const sheetBtn = {
+  display: "flex", alignItems: "center", gap: 14,
+  width: "100%", textAlign: "left",
+  padding: "14px 12px", borderRadius: 10,
+  background: "none", border: "none",
+  color: "#f5f0e8", fontFamily: "'DM Sans', sans-serif", fontSize: 15,
+  cursor: "pointer",
+};
+
 // ─── TAG EDITOR MODAL ──────────────────────────────────────────────────────────
 function TagEditor({ spot, onSave, onClose }) {
   const [tags, setTags] = useState(spot.tags || []);
@@ -545,7 +555,9 @@ function TagEditor({ spot, onSave, onClose }) {
 
   const addTag = () => {
     const t = input.trim().toLowerCase();
-    if (!t || tags.includes(t)) return;
+    if (!t) return;
+    // case-insensitive dedup
+    if (tags.some(existing => existing.toLowerCase() === t)) return;
     setTags([...tags, t]);
     setInput("");
     haptic(5);
@@ -615,7 +627,7 @@ function TagEditor({ spot, onSave, onClose }) {
         <div style={{ marginBottom: 20 }}>
           <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Suggestions</p>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {suggested.filter(s => !tags.includes(s)).map(s => (
+            {suggested.filter(s => !tags.some(t => t.toLowerCase() === s.toLowerCase())).map(s => (
               <button key={s} onClick={() => { setTags([...tags, s]); haptic(5); }} style={{
                 background: "#1a1a1a", color: "#888",
                 border: "1px solid #2a2a2a", borderRadius: 20, padding: "6px 12px",
@@ -945,7 +957,10 @@ export default function SpotDrop() {
     setScreen("detail");
   }, []);
 
-  const existingNeighborhoods = Array.from(new Set(savedSpots.map(s => s.neighborhood)));
+  // Filter neighborhoods by current tab so chips match the visible data
+  const tabFilteredForChips = tab === "all" ? savedSpots :
+    savedSpots.filter(s => tab === "visited" ? s.status === "visited" : (s.status || "wishlist") === "wishlist");
+  const existingNeighborhoods = Array.from(new Set(tabFilteredForChips.map(s => s.neighborhood)));
   const neighborhoods = ["All", ...existingNeighborhoods];
   const activeFilter = existingNeighborhoods.includes(filter) ? filter : "All";
 
@@ -1281,16 +1296,20 @@ export default function SpotDrop() {
               }}>📍 Near me</button>
 
               {!nearMe && (
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{
+                <button onClick={() => {
+                  const options = userPos ? ["date", "distance", "name"] : ["date", "name"];
+                  const currentIdx = options.indexOf(sortBy);
+                  const nextIdx = (currentIdx + 1) % options.length;
+                  setSortBy(options[nextIdx]);
+                  haptic(5);
+                }} style={{
                   background: "#141414", border: "1px solid #222",
-                  color: "#888", borderRadius: 20, padding: "6px 10px",
+                  color: "#888", borderRadius: 20, padding: "6px 12px",
                   fontFamily: "'DM Sans', sans-serif", fontSize: 11,
-                  cursor: "pointer", outline: "none",
+                  cursor: "pointer", whiteSpace: "nowrap",
                 }}>
-                  <option value="date">Recent first</option>
-                  <option value="distance" disabled={!userPos}>Distance {!userPos ? "(no loc)" : ""}</option>
-                  <option value="name">A–Z</option>
-                </select>
+                  {sortBy === "date" ? "🕐 Recent" : sortBy === "distance" ? "📏 Distance" : "🔤 A–Z"}
+                </button>
               )}
 
               {/* Neighborhood chips collapsed into horizontal scroll */}
@@ -1317,8 +1336,16 @@ export default function SpotDrop() {
             )}
             {savedSpots.length > 0 && filteredSpots.length === 0 && (
               <div style={{ textAlign: "center", padding: "40px 0", color: "#333", fontFamily: "'DM Sans', sans-serif" }}>
-                <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
-                <p style={{ fontSize: 13 }}>No matches. {nearMe ? "Nothing saved within 1km." : "Try a different search."}</p>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>
+                  {nearMe ? "📍" : search ? "🔍" : tab === "visited" ? "✓" : tab === "wishlist" ? "🎯" : "🔍"}
+                </div>
+                <p style={{ fontSize: 13 }}>
+                  {nearMe ? "Nothing saved within 1km." :
+                   search ? "No matches for your search." :
+                   tab === "visited" ? "No visited spots yet. Mark some as visited!" :
+                   tab === "wishlist" ? "Nothing on your wishlist. New saves go here." :
+                   "No matches."}
+                </p>
               </div>
             )}
             {filteredSpots.map((spot, i) => {
@@ -1358,6 +1385,8 @@ export default function SpotDrop() {
                         <span key={t} style={{
                           background: "#1e1e1e", padding: "1px 6px", borderRadius: 10,
                           color: "#666", fontSize: 10,
+                          maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          display: "inline-block",
                         }}>#{t}</span>
                       ))}
                     </div>
@@ -1376,35 +1405,6 @@ export default function SpotDrop() {
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}>⋯</button>
 
-                  {/* Action menu popover */}
-                  {actionMenu === spot.id && (
-                    <>
-                      <div onClick={() => setActionMenu(null)} style={{
-                        position: "fixed", inset: 0, zIndex: 50,
-                      }} />
-                      <div style={{
-                        position: "absolute", top: "100%", right: 8, marginTop: 4,
-                        background: "#1a1a1a", border: "1px solid #2a2a2a",
-                        borderRadius: 12, padding: 6, zIndex: 51,
-                        minWidth: 180, boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-                        animation: "fadeIn 0.15s ease",
-                      }}>
-                        <button onClick={(e) => { e.stopPropagation(); toggleVisited(spot.id); setActionMenu(null); }} style={menuBtn}>
-                          {isVisited ? "🎯 Move to Wishlist" : "✓ Mark as Visited"}
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); setTagEditor(spot); setActionMenu(null); }} style={menuBtn}>
-                          🏷️ Edit tags
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); shareSpot(spot); }} style={menuBtn}>
-                          📤 Share
-                        </button>
-                        <div style={{ height: 1, background: "#2a2a2a", margin: "4px 0" }} />
-                        <button onClick={(e) => { e.stopPropagation(); deleteSpot(spot.id); }} style={{ ...menuBtn, color: "#c06060" }}>
-                          🗑️ Delete
-                        </button>
-                      </div>
-                    </>
-                  )}
                 </div>
               );
             })}
@@ -1590,6 +1590,63 @@ export default function SpotDrop() {
       )}
 
       {/* NavBar rendered for all screens except map (map renders its own) */}
+      {/* Global action sheet — rendered once, positioned as fixed bottom sheet */}
+      {actionMenu && (() => {
+        const spot = savedSpots.find(s => s.id === actionMenu);
+        if (!spot) return null;
+        const isVisited = spot.status === "visited";
+        return (
+          <div
+            onClick={() => setActionMenu(null)}
+            style={{
+              position: "fixed", inset: 0,
+              background: "rgba(0,0,0,0.6)",
+              zIndex: 300,
+              display: "flex", alignItems: "flex-end", justifyContent: "center",
+              animation: "fadeIn 0.18s ease",
+            }}
+          >
+            <div onClick={(e) => e.stopPropagation()} style={{
+              width: "100%", maxWidth: 500,
+              background: "#141414", borderTop: "1px solid #2a2a2a",
+              borderRadius: "20px 20px 0 0",
+              padding: "12px 14px 32px",
+              animation: "slideUp 0.25s ease",
+            }}>
+              <div style={{ width: 36, height: 4, background: "#333", borderRadius: 2, margin: "0 auto 10px" }} />
+              <div style={{ padding: "10px 8px 14px", borderBottom: "1px solid #222", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 22 }}>{spot.emoji}</span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 16, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spot.name}</div>
+                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", marginTop: 1 }}>{spot.neighborhood}</div>
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => { toggleVisited(spot.id); setActionMenu(null); }} style={sheetBtn}>
+                <span>{isVisited ? "🎯" : "✓"}</span>
+                <span>{isVisited ? "Move to Wishlist" : "Mark as Visited"}</span>
+              </button>
+              <button onClick={() => { setTagEditor(spot); setActionMenu(null); }} style={sheetBtn}>
+                <span>🏷️</span><span>Edit tags</span>
+              </button>
+              <button onClick={() => shareSpot(spot)} style={sheetBtn}>
+                <span>📤</span><span>Share</span>
+              </button>
+              <div style={{ height: 1, background: "#222", margin: "6px 0" }} />
+              <button onClick={() => deleteSpot(spot.id)} style={{ ...sheetBtn, color: "#c06060" }}>
+                <span>🗑️</span><span>Delete</span>
+              </button>
+              <button onClick={() => setActionMenu(null)} style={{
+                width: "100%", marginTop: 10, padding: 12, borderRadius: 12,
+                background: "#1a1a1a", border: "1px solid #2a2a2a",
+                color: "#888", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+              }}>Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {screen !== "map" && <NavBar screen={screen} setScreen={setScreen} />}
     </div>
   );
