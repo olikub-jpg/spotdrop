@@ -108,13 +108,14 @@ const NavBar = memo(({ screen, setScreen }) => (
 ));
 
 // ─── MAP COMPONENT ─────────────────────────────────────────────────────────────
-// FIX: stable onSpotClick via useCallback in parent + memo here prevents marker re-render loop
 const MapView = memo(function MapView({ spots, onSpotClick }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
+  const userMarkerRef = useRef(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
 
   useEffect(() => {
     if (!USING_REAL_API) { setMapError(true); return; }
@@ -123,15 +124,24 @@ const MapView = memo(function MapView({ spots, onSpotClick }) {
       .catch(() => setMapError(true));
   }, []);
 
-  // FIX: map init — explicit pixel height so Google Maps has something to render into
+  // FIX: get user's current location once when map loads
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {}, // silently fail — map will just center on spots instead
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+
+  // Init map once
   useEffect(() => {
     if (!mapReady || !mapRef.current || mapInstanceRef.current) return;
-    const center = spots.length
-      ? { lat: spots[0].lat || 40.7268, lng: spots[0].lng || -73.9815 }
-      : { lat: 40.7268, lng: -73.9815 };
+    const center = userLocation
+      || (spots.length ? { lat: spots[0].lat || 40.7268, lng: spots[0].lng || -73.9815 } : { lat: 40.7268, lng: -73.9815 });
 
     mapInstanceRef.current = new window.google.maps.Map(mapRef.current, {
-      center, zoom: 13,
+      center, zoom: 14,
       styles: [
         { elementType: "geometry", stylers: [{ color: "#1a1a1a" }] },
         { elementType: "labels.text.fill", stylers: [{ color: "#888" }] },
@@ -144,9 +154,34 @@ const MapView = memo(function MapView({ spots, onSpotClick }) {
       ],
       disableDefaultUI: true, zoomControl: true,
     });
-  }, [mapReady]); // FIX: removed spots dep — map init should only run once
+  }, [mapReady, userLocation]);
 
-  // FIX: markers update separately from map init
+  // Draw the user's location as a blue dot + center on them
+  useEffect(() => {
+    if (!mapReady || !mapInstanceRef.current || !userLocation) return;
+
+    if (userMarkerRef.current) userMarkerRef.current.setMap(null);
+    userMarkerRef.current = new window.google.maps.Marker({
+      position: userLocation,
+      map: mapInstanceRef.current,
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: "#4285f4",
+        fillOpacity: 1,
+        strokeColor: "#ffffff",
+        strokeWeight: 3,
+      },
+      zIndex: 999,
+      title: "You are here",
+    });
+
+    // Center map on user location on first load
+    mapInstanceRef.current.setCenter(userLocation);
+    mapInstanceRef.current.setZoom(15);
+  }, [mapReady, userLocation]);
+
+  // Render saved spot markers
   useEffect(() => {
     if (!mapReady || !mapInstanceRef.current) return;
     markersRef.current.forEach(m => m.setMap(null));
@@ -170,19 +205,14 @@ const MapView = memo(function MapView({ spots, onSpotClick }) {
       marker.addListener("click", () => onSpotClick(spot));
       markersRef.current.push(marker);
     });
-
-    if (validSpots.length === 0) return;
-
-    if (validSpots.length === 1) {
-      // FIX: single spot — fitBounds zooms to ~20 which is unusable, use setCenter+zoom instead
-      mapInstanceRef.current.setCenter({ lat: validSpots[0].lat, lng: validSpots[0].lng });
-      mapInstanceRef.current.setZoom(15);
-    } else {
-      const bounds = new window.google.maps.LatLngBounds();
-      validSpots.forEach(s => bounds.extend({ lat: s.lat, lng: s.lng }));
-      mapInstanceRef.current.fitBounds(bounds, { padding: 60 });
-    }
   }, [mapReady, spots, onSpotClick]);
+
+  // Recenter button handler
+  const recenterOnMe = () => {
+    if (!userLocation || !mapInstanceRef.current) return;
+    mapInstanceRef.current.panTo(userLocation);
+    mapInstanceRef.current.setZoom(15);
+  };
 
   if (mapError) {
     return (
@@ -195,39 +225,26 @@ const MapView = memo(function MapView({ spots, onSpotClick }) {
         <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#555", lineHeight: 1.6 }}>
           {USING_REAL_API ? "Map failed to load. Check your API key." : "Map needs your Google API key."}
         </p>
-        <div style={{ width: "100%", marginTop: 8, position: "relative", height: 180, overflow: "hidden", borderRadius: 12, opacity: 0.3 }}>
-          {[...Array(6)].map((_, i) => (
-            <div key={i} style={{ position: "absolute", top: i * 32, left: 0, right: 0, height: 1, background: "#2a2a2a" }} />
-          ))}
-          {[...Array(6)].map((_, i) => (
-            <div key={i} style={{ position: "absolute", left: i * 52, top: 0, bottom: 0, width: 1, background: "#2a2a2a" }} />
-          ))}
-          {spots.slice(0, 5).map((s, i) => (
-            <div key={s.id} style={{
-              position: "absolute",
-              top: 20 + (i * 28) % 140, left: 20 + (i * 47) % 240,
-              width: 20, height: 20, borderRadius: "50%",
-              background: "#e8c547", fontSize: 10,
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>{s.emoji}</div>
-          ))}
-        </div>
       </div>
     );
   }
 
-  // FIX: explicit height on the map div — this was the root cause of the blank map
   return (
-    <div
-      ref={mapRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: "400px",
-        borderRadius: 20,
-        overflow: "hidden",
-      }}
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: "400px" }}>
+      <div ref={mapRef} style={{ width: "100%", height: "100%", borderRadius: 20, overflow: "hidden" }} />
+
+      {/* Recenter-on-me button */}
+      {userLocation && (
+        <button onClick={recenterOnMe} style={{
+          position: "absolute", bottom: 16, right: 16,
+          width: 48, height: 48, borderRadius: "50%",
+          background: "#141414", border: "1px solid #2a2a2a",
+          color: "#f5f0e8", cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 20, boxShadow: "0 2px 12px rgba(0,0,0,0.6)",
+        }} title="Center on my location">📍</button>
+      )}
+    </div>
   );
 });
 
