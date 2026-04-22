@@ -49,6 +49,44 @@ function formatDistance(m) {
   return `${(m / 1000).toFixed(1)}km away`;
 }
 
+// FIX #9: Haptic feedback helper — light vibration on supported devices
+function haptic(pattern = 10) {
+  try { navigator.vibrate?.(pattern); } catch {}
+}
+
+// FIX #11: Clean up ugly neighborhood strings like "Brooklyn, NY 11201"
+function cleanNeighborhood(raw) {
+  if (!raw) return "NYC";
+  let n = raw.trim();
+  // Strip ZIP codes
+  n = n.replace(/\s+\d{5}(-\d{4})?$/, "").trim();
+  // Strip state abbreviations
+  n = n.replace(/,?\s*(NY|NJ|CT|PA)$/i, "").trim();
+  // Normalize common names
+  const map = {
+    "New York": "Manhattan",
+    "Brooklyn": "Brooklyn",
+    "Queens": "Queens",
+    "Bronx": "The Bronx",
+    "Staten Island": "Staten Island",
+  };
+  if (map[n]) return map[n];
+  // Strip trailing comma junk
+  n = n.replace(/^,\s*/, "").replace(/,$/, "").trim();
+  return n || "NYC";
+}
+
+// FIX #2: Check if a place is currently open (from Places API opening_hours)
+function isOpenNow(hours) {
+  if (!hours) return null; // unknown
+  if (typeof hours.isOpen === "function") {
+    try { return hours.isOpen(); } catch { return null; }
+  }
+  if (typeof hours.open_now === "boolean") return hours.open_now;
+  return null;
+}
+
+
 // FIX: use global callback pattern — most reliable on mobile Safari
 function loadGoogleMaps(apiKey) {
   return new Promise((resolve, reject) => {
@@ -491,6 +529,119 @@ function CandidateStack({ candidates, onPick, onCancel }) {
   );
 }
 
+// Shared menu button style
+const menuBtn = {
+  display: "block", width: "100%", textAlign: "left",
+  padding: "10px 12px", borderRadius: 8,
+  background: "none", border: "none",
+  color: "#ddd", fontFamily: "'DM Sans', sans-serif", fontSize: 13,
+  cursor: "pointer",
+};
+
+// ─── TAG EDITOR MODAL ──────────────────────────────────────────────────────────
+function TagEditor({ spot, onSave, onClose }) {
+  const [tags, setTags] = useState(spot.tags || []);
+  const [input, setInput] = useState("");
+
+  const addTag = () => {
+    const t = input.trim().toLowerCase();
+    if (!t || tags.includes(t)) return;
+    setTags([...tags, t]);
+    setInput("");
+    haptic(5);
+  };
+
+  const removeTag = (t) => {
+    setTags(tags.filter(x => x !== t));
+    haptic(5);
+  };
+
+  const suggested = ["date night", "brunch", "group", "cozy", "quick bite", "splurge", "cheap eats"];
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+      zIndex: 200, animation: "fadeIn 0.2s ease",
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 500,
+        background: "#141414", borderTop: "1px solid #2a2a2a",
+        borderRadius: "20px 20px 0 0",
+        padding: "28px 24px 40px",
+        animation: "slideUp 0.25s ease",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 14 }}>
+          <div style={{ width: 40, height: 4, background: "#333", borderRadius: 2, margin: "0 auto 16px" }} />
+          <h2 style={{ fontFamily: "'DM Serif Display', Georgia, serif", fontSize: 22, fontStyle: "italic" }}>Edit tags</h2>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#555", marginTop: 4 }}>{spot.name}</p>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <input
+            type="text" value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addTag()}
+            placeholder="Add a tag..."
+            autoFocus
+            style={{
+              flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a",
+              borderRadius: 10, padding: "10px 14px", color: "#f5f0e8",
+              fontFamily: "'DM Sans', sans-serif", fontSize: 14, outline: "none",
+            }}
+          />
+          <button onClick={addTag} style={{
+            padding: "10px 16px", borderRadius: 10,
+            background: "#e8c547", border: "none", color: "#0a0a0a",
+            fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer",
+          }}>Add</button>
+        </div>
+
+        {tags.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Your tags</p>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {tags.map(t => (
+                <button key={t} onClick={() => removeTag(t)} style={{
+                  background: "#e8c547", color: "#0a0a0a",
+                  border: "none", borderRadius: 20, padding: "6px 12px",
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 12, cursor: "pointer",
+                }}>#{t} ✕</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Suggestions</p>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {suggested.filter(s => !tags.includes(s)).map(s => (
+              <button key={s} onClick={() => { setTags([...tags, s]); haptic(5); }} style={{
+                background: "#1a1a1a", color: "#888",
+                border: "1px solid #2a2a2a", borderRadius: 20, padding: "6px 12px",
+                fontFamily: "'DM Sans', sans-serif", fontSize: 12, cursor: "pointer",
+              }}>+ {s}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={onClose} style={{
+            flex: 1, padding: 12, borderRadius: 12,
+            background: "none", border: "1px solid #2a2a2a",
+            color: "#888", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+          }}>Cancel</button>
+          <button onClick={() => onSave(tags)} style={{
+            flex: 2, padding: 12, borderRadius: 12,
+            background: "#e8c547", border: "none", color: "#0a0a0a",
+            fontFamily: "'DM Sans', sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer",
+          }}>Save tags</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function SpotDrop() {
   const [screen, setScreen] = useState("home");
@@ -516,6 +667,14 @@ export default function SpotDrop() {
   const [alreadySaved, setAlreadySaved] = useState(false);
   const [filter, setFilter] = useState("All");
   const [gpsStatus, setGpsStatus] = useState("idle");
+  // NEW: list-screen features
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("date"); // "date" | "distance" | "name"
+  const [tab, setTab] = useState("all"); // "all" | "wishlist" | "visited"
+  const [nearMe, setNearMe] = useState(false);
+  const [userPos, setUserPos] = useState(null); // for near-me + distance sort
+  const [actionMenu, setActionMenu] = useState(null); // spot id with menu open
+  const [tagEditor, setTagEditor] = useState(null); // spot being edited
   const [candidates, setCandidates] = useState([]); // FIX: list of nearby places to pick from
 
   const detectTimerRef = useRef(null);
@@ -567,10 +726,11 @@ export default function SpotDrop() {
       distance: formatDistance(meters),
       distanceMeters: meters,
       emoji: getEmoji(place.types),
-      neighborhood: place.vicinity?.split(",").pop()?.trim() || "NYC",
+      neighborhood: cleanNeighborhood(place.vicinity?.split(",").pop()),
       lat: placeLat,
       lng: placeLng,
       photoRef,
+      openingHours: place.opening_hours ? { open_now: isOpenNow(place.opening_hours) } : null,
     };
   }, []);
 
@@ -584,6 +744,7 @@ export default function SpotDrop() {
 
   // ── Real GPS + Places detection ────────────────────────────────────────────
   const detectReal = useCallback(async () => {
+    haptic(10);
     setGpsStatus("locating");
     setDetected(null);
     setCandidates([]);
@@ -649,6 +810,7 @@ export default function SpotDrop() {
 
   // ── Mock detection ─────────────────────────────────────────────────────────
   const detectMock = useCallback(() => {
+    haptic(10);
     if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
     setGpsStatus("locating");
     setDetected(null);
@@ -679,6 +841,7 @@ export default function SpotDrop() {
       safeTimeout(() => setAlreadySaved(false), 2000);
       return;
     }
+    haptic(15);
     setSaveAnim(true);
     const savedVibe = selectedVibe;
     const savedNote = note;
@@ -695,6 +858,9 @@ export default function SpotDrop() {
         note: savedNote,
         photoUrl: resolvedPhotoUrl,
         photoRef: undefined, // strip live ref before persisting
+        status: "wishlist",  // #1: default to wishlist, can toggle to visited
+        tags: [],            // #6: user-defined tags
+        openNow: detected.openingHours?.open_now ?? null,
       };
       setSavedSpots(prev => [spotToSave, ...prev]);
       setDetected(null);
@@ -714,10 +880,64 @@ export default function SpotDrop() {
   }, []);
 
   const deleteSpot = useCallback((id) => {
+    haptic(20);
     setSavedSpots(prev => prev.filter(s => s.id !== id));
     setSelectedSpot(null);
+    setActionMenu(null);
     setScreen("saved");
   }, []);
+
+  // NEW #1: toggle between wishlist and visited
+  const toggleVisited = useCallback((id) => {
+    haptic(10);
+    setSavedSpots(prev => prev.map(s =>
+      s.id === id
+        ? { ...s, status: s.status === "visited" ? "wishlist" : "visited" }
+        : s
+    ));
+  }, []);
+
+  // NEW #6: update tags on a spot
+  const updateTags = useCallback((id, tags) => {
+    setSavedSpots(prev => prev.map(s => s.id === id ? { ...s, tags } : s));
+  }, []);
+
+  // NEW #7: share a spot via native share sheet
+  const shareSpot = useCallback((spot) => {
+    haptic(10);
+    const mapsLink = spot.id && typeof spot.id === "string" && spot.id.startsWith("Ch")
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(spot.name + " " + (spot.address || ""))}&query_place_id=${spot.id}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(spot.name + " " + (spot.address || ""))}`;
+    const text = `${spot.emoji} ${spot.name}\n${spot.address || ""}\n${mapsLink}`;
+    if (navigator.share) {
+      navigator.share({ title: spot.name, text, url: mapsLink }).catch(() => {});
+    } else {
+      navigator.clipboard?.writeText(text);
+      alert("Link copied to clipboard!");
+    }
+    setActionMenu(null);
+  }, []);
+
+  // NEW #3: grab user location for "near me" filtering
+  const fetchUserPos = useCallback(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+
+  // Auto-fetch user location when they open the saved list
+  useEffect(() => {
+    if (screen === "saved" && !userPos) fetchUserPos();
+  }, [screen, userPos, fetchUserPos]);
+
+  // FIX: keep selectedSpot fresh by deriving it from savedSpots on every render
+  // This way toggleVisited/updateTags/etc. reflect immediately in the detail view
+  const liveSelectedSpot = selectedSpot
+    ? (savedSpots.find(s => s.id === selectedSpot.id) || selectedSpot)
+    : null;
 
   // FIX: stable reference so MapView markers effect doesn't re-run on every render
   const handleMapSpotClick = useCallback((spot) => {
@@ -728,7 +948,54 @@ export default function SpotDrop() {
   const existingNeighborhoods = Array.from(new Set(savedSpots.map(s => s.neighborhood)));
   const neighborhoods = ["All", ...existingNeighborhoods];
   const activeFilter = existingNeighborhoods.includes(filter) ? filter : "All";
-  const filteredSpots = activeFilter === "All" ? savedSpots : savedSpots.filter(s => s.neighborhood === activeFilter);
+
+  // NEW: richer filtering pipeline
+  const filteredSpots = (() => {
+    let list = [...savedSpots];
+
+    // Tab filter: all / wishlist / visited
+    if (tab === "wishlist") list = list.filter(s => (s.status || "wishlist") === "wishlist");
+    if (tab === "visited") list = list.filter(s => s.status === "visited");
+
+    // Neighborhood chip
+    if (activeFilter !== "All") list = list.filter(s => s.neighborhood === activeFilter);
+
+    // Search query (name, note, tags, neighborhood)
+    if (search.trim()) {
+      const q = search.toLowerCase().trim();
+      list = list.filter(s =>
+        s.name?.toLowerCase().includes(q) ||
+        s.note?.toLowerCase().includes(q) ||
+        s.neighborhood?.toLowerCase().includes(q) ||
+        s.type?.toLowerCase().includes(q) ||
+        (s.tags || []).some(t => t.toLowerCase().includes(q))
+      );
+    }
+
+    // Near-me: within 1km of user
+    if (nearMe && userPos) {
+      list = list
+        .filter(s => s.lat && s.lng)
+        .map(s => ({ ...s, _dist: distanceMeters(userPos.lat, userPos.lng, s.lat, s.lng) }))
+        .filter(s => s._dist < 1000)
+        .sort((a, b) => a._dist - b._dist);
+    }
+
+    // Sort
+    if (!nearMe) {
+      if (sortBy === "distance" && userPos) {
+        list = list
+          .map(s => ({ ...s, _dist: s.lat ? distanceMeters(userPos.lat, userPos.lng, s.lat, s.lng) : Infinity }))
+          .sort((a, b) => a._dist - b._dist);
+      } else if (sortBy === "name") {
+        list.sort((a, b) => a.name.localeCompare(b.name));
+      } else {
+        list.sort((a, b) => b.savedAt - a.savedAt); // date desc
+      }
+    }
+
+    return list;
+  })();
   const isDetecting = gpsStatus === "locating" || gpsStatus === "searching";
 
   return (
@@ -945,48 +1212,212 @@ export default function SpotDrop() {
             <h1 style={{ fontSize: 32, fontStyle: "italic" }}>The List.</h1>
           </div>
 
+          {/* NEW #1: Wishlist / Visited tabs */}
           {savedSpots.length > 0 && (
-            <div style={{ padding: "0 28px 14px", display: "flex", gap: 7, overflowX: "auto" }}>
-              {neighborhoods.map(n => (
-                <button key={n} className="filter-chip" onClick={() => setFilter(n)} style={{
-                  background: activeFilter === n ? "#f5f0e8" : "#141414",
-                  color: activeFilter === n ? "#0a0a0a" : "#555",
-                  border: "1px solid " + (activeFilter === n ? "#f5f0e8" : "#222"),
-                  borderRadius: 20, padding: "6px 14px", whiteSpace: "nowrap",
-                  fontFamily: "'DM Sans', sans-serif", fontSize: 12,
-                }}>{n}</button>
+            <div style={{ padding: "0 28px 12px", display: "flex", gap: 6 }}>
+              {[
+                { id: "all", label: "All", emoji: "📚" },
+                { id: "wishlist", label: "Wishlist", emoji: "🎯" },
+                { id: "visited", label: "Visited", emoji: "✓" },
+              ].map(t => (
+                <button key={t.id} onClick={() => { haptic(5); setTab(t.id); }} style={{
+                  flex: 1, padding: "8px 10px", borderRadius: 12,
+                  background: tab === t.id ? "#e8c547" : "#141414",
+                  border: "1px solid " + (tab === t.id ? "#e8c547" : "#222"),
+                  color: tab === t.id ? "#0a0a0a" : "#888",
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: tab === t.id ? 600 : 400,
+                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                }}>
+                  <span>{t.emoji}</span>
+                  <span>{t.label}</span>
+                </button>
               ))}
             </div>
           )}
 
+          {/* NEW #4: Search bar */}
+          {savedSpots.length > 0 && (
+            <div style={{ padding: "0 28px 10px", position: "relative" }}>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name, note, tag..."
+                style={{
+                  width: "100%",
+                  background: "#141414",
+                  border: "1px solid #222",
+                  borderRadius: 12,
+                  padding: "10px 36px 10px 14px",
+                  color: "#f5f0e8",
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: 13,
+                  outline: "none",
+                }}
+              />
+              <span style={{
+                position: "absolute", right: 40, top: "50%", transform: "translateY(-50%)",
+                color: "#444", fontSize: 14, pointerEvents: "none",
+              }}>🔍</span>
+              {search && (
+                <button onClick={() => setSearch("")} style={{
+                  position: "absolute", right: 34, top: "50%", transform: "translateY(-50%)",
+                  background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 14,
+                }}>✕</button>
+              )}
+            </div>
+          )}
+
+          {/* NEW #3 + #4: Near-me toggle + sort picker */}
+          {savedSpots.length > 0 && (
+            <div style={{ padding: "0 28px 12px", display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={() => { haptic(5); setNearMe(n => !n); }} style={{
+                background: nearMe ? "#e8c547" : "#141414",
+                color: nearMe ? "#0a0a0a" : "#888",
+                border: "1px solid " + (nearMe ? "#e8c547" : "#222"),
+                borderRadius: 20, padding: "6px 12px",
+                fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: nearMe ? 600 : 400,
+                cursor: "pointer",
+              }}>📍 Near me</button>
+
+              {!nearMe && (
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{
+                  background: "#141414", border: "1px solid #222",
+                  color: "#888", borderRadius: 20, padding: "6px 10px",
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                  cursor: "pointer", outline: "none",
+                }}>
+                  <option value="date">Recent first</option>
+                  <option value="distance" disabled={!userPos}>Distance {!userPos ? "(no loc)" : ""}</option>
+                  <option value="name">A–Z</option>
+                </select>
+              )}
+
+              {/* Neighborhood chips collapsed into horizontal scroll */}
+              <div style={{ display: "flex", gap: 5, overflowX: "auto", flex: 1, minWidth: 0 }}>
+                {neighborhoods.slice(0, 5).map(n => n !== "All" && (
+                  <button key={n} onClick={() => setFilter(n === activeFilter ? "All" : n)} style={{
+                    background: activeFilter === n ? "#f5f0e8" : "transparent",
+                    color: activeFilter === n ? "#0a0a0a" : "#555",
+                    border: "1px solid " + (activeFilter === n ? "#f5f0e8" : "#222"),
+                    borderRadius: 20, padding: "4px 10px", whiteSpace: "nowrap",
+                    fontFamily: "'DM Sans', sans-serif", fontSize: 11, cursor: "pointer",
+                  }}>{n}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ padding: "0 18px" }}>
-            {filteredSpots.length === 0 && (
+            {savedSpots.length === 0 && (
               <div style={{ textAlign: "center", padding: "60px 0", color: "#333", fontFamily: "'DM Sans', sans-serif" }}>
                 <div style={{ fontSize: 36, marginBottom: 10 }}>🗺️</div>
                 <p>No spots yet. Go explore NYC!</p>
               </div>
             )}
-            {filteredSpots.map((spot, i) => (
-              <div key={spot.id} className="spot-row"
-                onClick={() => { setSelectedSpot(spot); setScreen("detail"); }}
-                style={{
-                  background: "#111", border: "1px solid #1c1c1c",
-                  borderRadius: 16, padding: "15px 16px", marginBottom: 9,
-                  cursor: "pointer", display: "flex", alignItems: "center", gap: 13,
-                  animationDelay: `${i * 0.04}s`,
-                }}>
-                <span style={{ fontSize: 26, flexShrink: 0 }}>{spot.emoji}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 16, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spot.name}</div>
-                  <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#444" }}>
-                    {spot.vibe && <span style={{ color: "#666", marginRight: 8 }}>{spot.vibe}</span>}
-                    {spot.neighborhood}
-                  </div>
-                </div>
-                <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#333", flexShrink: 0 }}>{formatDate(spot.savedAt)}</div>
+            {savedSpots.length > 0 && filteredSpots.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 0", color: "#333", fontFamily: "'DM Sans', sans-serif" }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
+                <p style={{ fontSize: 13 }}>No matches. {nearMe ? "Nothing saved within 1km." : "Try a different search."}</p>
               </div>
-            ))}
+            )}
+            {filteredSpots.map((spot, i) => {
+              const isVisited = spot.status === "visited";
+              const openNow = spot.openNow;
+              return (
+                <div key={spot.id} className="spot-row"
+                  style={{
+                    background: "#111", border: "1px solid #1c1c1c",
+                    borderRadius: 16, padding: "15px 16px", marginBottom: 9,
+                    display: "flex", alignItems: "center", gap: 13,
+                    animationDelay: `${i * 0.04}s`,
+                    opacity: isVisited ? 0.7 : 1,
+                    position: "relative",
+                  }}>
+                  <span onClick={() => { setSelectedSpot(spot); setScreen("detail"); }}
+                    style={{ fontSize: 26, flexShrink: 0, cursor: "pointer" }}>{spot.emoji}</span>
+                  <div onClick={() => { setSelectedSpot(spot); setScreen("detail"); }}
+                    style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+                    <div style={{ fontSize: 16, marginBottom: 2, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{spot.name}</span>
+                      {isVisited && <span style={{ fontSize: 11, color: "#4a9a4a" }}>✓</span>}
+                      {openNow === true && <span style={{
+                        width: 6, height: 6, borderRadius: "50%",
+                        background: "#4a9a4a", flexShrink: 0,
+                      }} title="Open now" />}
+                      {openNow === false && <span style={{
+                        width: 6, height: 6, borderRadius: "50%",
+                        background: "#9a4a4a", flexShrink: 0,
+                      }} title="Closed" />}
+                    </div>
+                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#444", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      {spot.vibe && <span style={{ color: "#666" }}>{spot.vibe}</span>}
+                      <span>{spot.neighborhood}</span>
+                      {spot._dist != null && <span style={{ color: "#e8c547" }}>• {formatDistance(spot._dist)}</span>}
+                      {(spot.tags || []).slice(0, 2).map(t => (
+                        <span key={t} style={{
+                          background: "#1e1e1e", padding: "1px 6px", borderRadius: 10,
+                          color: "#666", fontSize: 10,
+                        }}>#{t}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* NEW: ⋯ menu button */}
+                  <button onClick={(e) => {
+                    e.stopPropagation();
+                    haptic(5);
+                    setActionMenu(actionMenu === spot.id ? null : spot.id);
+                  }} style={{
+                    width: 32, height: 32, borderRadius: 10,
+                    background: actionMenu === spot.id ? "#222" : "transparent",
+                    border: "none", color: "#666", cursor: "pointer",
+                    fontSize: 18, flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>⋯</button>
+
+                  {/* Action menu popover */}
+                  {actionMenu === spot.id && (
+                    <>
+                      <div onClick={() => setActionMenu(null)} style={{
+                        position: "fixed", inset: 0, zIndex: 50,
+                      }} />
+                      <div style={{
+                        position: "absolute", top: "100%", right: 8, marginTop: 4,
+                        background: "#1a1a1a", border: "1px solid #2a2a2a",
+                        borderRadius: 12, padding: 6, zIndex: 51,
+                        minWidth: 180, boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                        animation: "fadeIn 0.15s ease",
+                      }}>
+                        <button onClick={(e) => { e.stopPropagation(); toggleVisited(spot.id); setActionMenu(null); }} style={menuBtn}>
+                          {isVisited ? "🎯 Move to Wishlist" : "✓ Mark as Visited"}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setTagEditor(spot); setActionMenu(null); }} style={menuBtn}>
+                          🏷️ Edit tags
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); shareSpot(spot); }} style={menuBtn}>
+                          📤 Share
+                        </button>
+                        <div style={{ height: 1, background: "#2a2a2a", margin: "4px 0" }} />
+                        <button onClick={(e) => { e.stopPropagation(); deleteSpot(spot.id); }} style={{ ...menuBtn, color: "#c06060" }}>
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          {/* NEW #6: Tag editor modal */}
+          {tagEditor && (
+            <TagEditor
+              spot={tagEditor}
+              onSave={(tags) => { updateTags(tagEditor.id, tags); setTagEditor(null); }}
+              onClose={() => setTagEditor(null)}
+            />
+          )}
         </div>
       )}
 
@@ -1012,7 +1443,7 @@ export default function SpotDrop() {
       )}
 
       {/* ── DETAIL ── */}
-      {screen === "detail" && selectedSpot && (
+      {screen === "detail" && liveSelectedSpot && (
         <div style={{ minHeight: "100vh", paddingBottom: 80, animation: "slideUp 0.3s ease" }}>
           <div style={{ padding: "52px 28px 20px" }}>
             <button className="nav-btn" onClick={() => setScreen("saved")} style={{
@@ -1022,42 +1453,77 @@ export default function SpotDrop() {
             }}>← Back</button>
           </div>
           <div style={{ padding: "0 28px 40px" }}>
-            {selectedSpot.photoUrl && (
+            {liveSelectedSpot.photoUrl && (
               <div style={{
                 width: "100%", height: 180,
                 borderRadius: 18, overflow: "hidden",
                 marginBottom: 18, background: "#141414",
               }}>
-                <img src={selectedSpot.photoUrl} alt={selectedSpot.name}
+                <img src={liveSelectedSpot.photoUrl} alt={liveSelectedSpot.name}
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   onError={(e) => { e.target.style.display = "none"; }}
                 />
               </div>
             )}
-            <div style={{ fontSize: 58, marginBottom: 16 }}>{selectedSpot.emoji}</div>
-            <h1 style={{ fontSize: 28, lineHeight: 1.2, marginBottom: 5 }}>{selectedSpot.name}</h1>
-            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", marginBottom: 3, textTransform: "capitalize" }}>{selectedSpot.type}</p>
-            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444", marginBottom: 22 }}>{selectedSpot.address}</p>
-            <div style={{ display: "flex", gap: 10, marginBottom: 22, flexWrap: "wrap" }}>
-              {selectedSpot.vibe && (
-                <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#888" }}>{selectedSpot.vibe}</span>
+            <div style={{ fontSize: 58, marginBottom: 16 }}>{liveSelectedSpot.emoji}</div>
+            <h1 style={{ fontSize: 28, lineHeight: 1.2, marginBottom: 5 }}>{liveSelectedSpot.name}</h1>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", marginBottom: 3, textTransform: "capitalize" }}>{liveSelectedSpot.type}</p>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444", marginBottom: 22 }}>{liveSelectedSpot.address}</p>
+            <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+              {/* NEW: visited/wishlist toggle */}
+              <button onClick={() => toggleVisited(liveSelectedSpot.id)} style={{
+                background: liveSelectedSpot.status === "visited" ? "#1a2a1a" : "#1a1a1a",
+                border: "1px solid " + (liveSelectedSpot.status === "visited" ? "#2a4a2a" : "#252525"),
+                padding: "8px 14px", borderRadius: 20,
+                fontFamily: "'DM Sans', sans-serif", fontSize: 13,
+                color: liveSelectedSpot.status === "visited" ? "#6ab96a" : "#888",
+                cursor: "pointer",
+              }}>
+                {liveSelectedSpot.status === "visited" ? "✓ Visited" : "🎯 Wishlist"}
+              </button>
+              {liveSelectedSpot.openNow === true && (
+                <span style={{ background: "#1a2a1a", border: "1px solid #2a4a2a", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#6ab96a" }}>
+                  🟢 Open now
+                </span>
               )}
-              <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📅 {formatDate(selectedSpot.savedAt)}</span>
-              <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📍 {selectedSpot.neighborhood}</span>
+              {liveSelectedSpot.openNow === false && (
+                <span style={{ background: "#2a1a1a", border: "1px solid #4a2a2a", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#b96a6a" }}>
+                  🔴 Closed
+                </span>
+              )}
+              {liveSelectedSpot.vibe && (
+                <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#888" }}>{liveSelectedSpot.vibe}</span>
+              )}
+              <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📅 {formatDate(liveSelectedSpot.savedAt)}</span>
+              <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📍 {liveSelectedSpot.neighborhood}</span>
             </div>
-            {selectedSpot.note ? (
+
+            {/* NEW: tags display */}
+            {(liveSelectedSpot.tags || []).length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 22 }}>
+                {liveSelectedSpot.tags.map(t => (
+                  <span key={t} style={{
+                    background: "#1e1a0e", border: "1px solid #3a2a0a",
+                    color: "#c8a547", padding: "4px 10px", borderRadius: 14,
+                    fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                  }}>#{t}</span>
+                ))}
+              </div>
+            )}
+
+            {liveSelectedSpot.note ? (
               <div style={{ background: "#141414", border: "1px solid #222", borderRadius: 16, padding: 18, marginBottom: 22 }}>
                 <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "#444", letterSpacing: 2.5, textTransform: "uppercase", marginBottom: 8 }}>Your note</p>
-                <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#888", lineHeight: 1.7 }}>{selectedSpot.note}</p>
+                <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#888", lineHeight: 1.7 }}>{liveSelectedSpot.note}</p>
               </div>
             ) : null}
-            {selectedSpot.lat && (
+            {liveSelectedSpot.lat && (
               <a href={
                 // FIX: send to the restaurant's Maps page, not just a coordinate pin.
                 // Uses name + address as query and place_id as target when available.
-                selectedSpot.id && typeof selectedSpot.id === "string" && selectedSpot.id.startsWith("Ch")
-                  ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedSpot.name + " " + (selectedSpot.address || ""))}&query_place_id=${selectedSpot.id}`
-                  : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedSpot.name + " " + (selectedSpot.address || ""))}`
+                liveSelectedSpot.id && typeof liveSelectedSpot.id === "string" && liveSelectedSpot.id.startsWith("Ch")
+                  ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(liveSelectedSpot.name + " " + (liveSelectedSpot.address || ""))}&query_place_id=${liveSelectedSpot.id}`
+                  : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(liveSelectedSpot.name + " " + (liveSelectedSpot.address || ""))}`
               } target="_blank" rel="noreferrer"
                 style={{
                   display: "block", width: "100%", padding: 14, borderRadius: 14, marginBottom: 12,
@@ -1065,7 +1531,7 @@ export default function SpotDrop() {
                   color: "#f5f0e8", fontFamily: "'DM Sans', sans-serif", fontSize: 14, textDecoration: "none",
                 }}>🗺️ Open in Google Maps</a>
             )}
-            <button onClick={() => deleteSpot(selectedSpot.id)} style={{
+            <button onClick={() => deleteSpot(liveSelectedSpot.id)} style={{
               width: "100%", padding: 14, borderRadius: 14,
               background: "none", border: "1px solid #2a1414",
               color: "#5a2a2a", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
