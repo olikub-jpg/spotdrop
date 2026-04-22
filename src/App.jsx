@@ -1,8 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, memo } from "react";
 
-// ─── PASTE YOUR GOOGLE API KEY HERE ───────────────────────────────────────────
-const GOOGLE_API_KEY = "AIzaSyCH724hGDPj7qG7vXHfZ3wa27hfZ8Vfhv0";
-// ──────────────────────────────────────────────────────────────────────────────
+const GOOGLE_API_KEY = import.meta.env.VITE_GOOGL_MAP;
 
 const VIBES = ["🔥 Hyped", "🌿 Chill", "🎶 Lively", "💡 Hidden gem", "💸 Splurge"];
 
@@ -34,11 +32,19 @@ function getNextMock(lastId) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+// FIX: robust loader that handles "script exists but not yet loaded" race condition
 function loadGoogleMaps(apiKey) {
   return new Promise((resolve, reject) => {
     if (window.google?.maps) { resolve(); return; }
     const existing = document.getElementById("gmap-script");
-    if (existing) { existing.addEventListener("load", resolve); return; }
+    if (existing) {
+      // Script is in DOM but may not have fired onload yet — poll instead of relying on event
+      const poll = setInterval(() => {
+        if (window.google?.maps) { clearInterval(poll); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(poll); reject(new Error("Maps load timeout")); }, 10000);
+      return;
+    }
     const s = document.createElement("script");
     s.id = "gmap-script";
     s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
@@ -49,10 +55,39 @@ function loadGoogleMaps(apiKey) {
   });
 }
 
-const USING_REAL_API = GOOGLE_API_KEY !== "YOUR_API_KEY_HERE";
+const USING_REAL_API = !!GOOGLE_API_KEY;
 
-// ─── MAP COMPONENT ────────────────────────────────────────────────────────────
-function MapView({ spots, onSpotClick }) {
+// FIX: NavBar moved OUTSIDE SpotDrop so it's never recreated on parent re-render
+// FIX: memo() prevents unnecessary re-renders
+const NavBar = memo(({ screen, setScreen }) => (
+  <div style={{
+    position: "fixed", bottom: 0, left: 0, right: 0,
+    background: "#0d0d0d", borderTop: "1px solid #1e1e1e",
+    display: "flex", padding: "10px 0 24px",
+    zIndex: 100,
+  }}>
+    {[
+      { id: "home", icon: "📍", label: "Pin" },
+      { id: "saved", icon: "🗒️", label: "List" },
+      { id: "map", icon: "🗺️", label: "Map" },
+      { id: "install", icon: "📱", label: "Install" },
+    ].map(tab => (
+      <button key={tab.id} onClick={() => setScreen(tab.id)} style={{
+        flex: 1, background: "none", border: "none", cursor: "pointer",
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+        opacity: screen === tab.id ? 1 : 0.35,
+        transition: "opacity 0.2s",
+      }}>
+        <span style={{ fontSize: 22 }}>{tab.icon}</span>
+        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: screen === tab.id ? "#e8c547" : "#888", letterSpacing: 0.5 }}>{tab.label}</span>
+      </button>
+    ))}
+  </div>
+));
+
+// ─── MAP COMPONENT ─────────────────────────────────────────────────────────────
+// FIX: stable onSpotClick via useCallback in parent + memo here prevents marker re-render loop
+const MapView = memo(function MapView({ spots, onSpotClick }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
@@ -66,6 +101,7 @@ function MapView({ spots, onSpotClick }) {
       .catch(() => setMapError(true));
   }, []);
 
+  // FIX: map init — explicit pixel height so Google Maps has something to render into
   useEffect(() => {
     if (!mapReady || !mapRef.current || mapInstanceRef.current) return;
     const center = spots.length
@@ -86,14 +122,16 @@ function MapView({ spots, onSpotClick }) {
       ],
       disableDefaultUI: true, zoomControl: true,
     });
-  }, [mapReady, spots]);
+  }, [mapReady]); // FIX: removed spots dep — map init should only run once
 
+  // FIX: markers update separately from map init
   useEffect(() => {
     if (!mapReady || !mapInstanceRef.current) return;
     markersRef.current.forEach(m => m.setMap(null));
     markersRef.current = [];
-    spots.forEach(spot => {
-      if (!spot.lat || !spot.lng) return;
+
+    const validSpots = spots.filter(s => s.lat && s.lng);
+    validSpots.forEach(spot => {
       const marker = new window.google.maps.Marker({
         position: { lat: spot.lat, lng: spot.lng },
         map: mapInstanceRef.current,
@@ -110,15 +148,21 @@ function MapView({ spots, onSpotClick }) {
       marker.addListener("click", () => onSpotClick(spot));
       markersRef.current.push(marker);
     });
-    if (spots.length && mapInstanceRef.current) {
+
+    if (validSpots.length === 0) return;
+
+    if (validSpots.length === 1) {
+      // FIX: single spot — fitBounds zooms to ~20 which is unusable, use setCenter+zoom instead
+      mapInstanceRef.current.setCenter({ lat: validSpots[0].lat, lng: validSpots[0].lng });
+      mapInstanceRef.current.setZoom(15);
+    } else {
       const bounds = new window.google.maps.LatLngBounds();
-      spots.forEach(s => s.lat && bounds.extend({ lat: s.lat, lng: s.lng }));
-      mapInstanceRef.current.fitBounds(bounds);
+      validSpots.forEach(s => bounds.extend({ lat: s.lat, lng: s.lng }));
+      mapInstanceRef.current.fitBounds(bounds, { padding: 60 });
     }
   }, [mapReady, spots, onSpotClick]);
 
-  if (mapError || !USING_REAL_API) {
-    // Fallback: stylized static map mockup
+  if (mapError) {
     return (
       <div style={{
         flex: 1, background: "#111", borderRadius: 20,
@@ -127,11 +171,9 @@ function MapView({ spots, onSpotClick }) {
       }}>
         <div style={{ fontSize: 36 }}>🗺️</div>
         <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#555", lineHeight: 1.6 }}>
-          Map needs your Google API key.<br />
-          <span style={{ color: "#888" }}>Add it at the top of the file to see your spots on a live map.</span>
+          {USING_REAL_API ? "Map failed to load. Check your API key." : "Map needs your Google API key."}
         </p>
-        {/* Fake map grid for visual */}
-        <div style={{ width: "100%", marginTop: 8, position: "relative", height: 180, overflow: "hidden", borderRadius: 12, opacity: 0.4 }}>
+        <div style={{ width: "100%", marginTop: 8, position: "relative", height: 180, overflow: "hidden", borderRadius: 12, opacity: 0.3 }}>
           {[...Array(6)].map((_, i) => (
             <div key={i} style={{ position: "absolute", top: i * 32, left: 0, right: 0, height: 1, background: "#2a2a2a" }} />
           ))}
@@ -152,13 +194,24 @@ function MapView({ spots, onSpotClick }) {
     );
   }
 
-  return <div ref={mapRef} style={{ flex: 1, borderRadius: 20, overflow: "hidden", minHeight: 300 }} />;
-}
+  // FIX: explicit height on the map div — this was the root cause of the blank map
+  return (
+    <div
+      ref={mapRef}
+      style={{
+        width: "100%",
+        height: "100%",
+        minHeight: "400px",
+        borderRadius: 20,
+        overflow: "hidden",
+      }}
+    />
+  );
+});
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// ─── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function SpotDrop() {
-  const [screen, setScreen] = useState("home"); // home | saved | map | detail | install
-  const [detecting, setDetecting] = useState(false);
+  const [screen, setScreen] = useState("home");
   const [detected, setDetected] = useState(null);
   const [savedSpots, setSavedSpots] = useState([
     { ...MOCK_SPOTS[1], savedAt: Date.now() - 86400000 * 2, vibe: "💡 Hidden gem", note: "Looked incredible at night" },
@@ -171,17 +224,39 @@ export default function SpotDrop() {
   const [justSaved, setJustSaved] = useState(false);
   const [alreadySaved, setAlreadySaved] = useState(false);
   const [filter, setFilter] = useState("All");
-  const [gpsStatus, setGpsStatus] = useState("idle"); // idle | locating | searching | done | error
+  const [gpsStatus, setGpsStatus] = useState("idle");
 
   const detectTimerRef = useRef(null);
   const lastDetectedIdRef = useRef(null);
+  // FIX: track all timeouts for cleanup on unmount
+  const timeoutsRef = useRef([]);
 
-  // ── Real GPS + Places detection ──────────────────────────────────────────
+  const safeTimeout = useCallback((fn, delay) => {
+    const id = setTimeout(fn, delay);
+    timeoutsRef.current.push(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // FIX: clear all timeouts on unmount to prevent memory leaks
+      timeoutsRef.current.forEach(clearTimeout);
+      if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
+    };
+  }, []);
+
+  // ── Real GPS + Places detection ────────────────────────────────────────────
   const detectReal = useCallback(async () => {
     setGpsStatus("locating");
     setDetected(null);
     setSaveAnim(false);
     setAlreadySaved(false);
+
+    // FIX: check geolocation availability before calling it
+    if (!navigator.geolocation) {
+      setGpsStatus("error");
+      return;
+    }
 
     try {
       const pos = await new Promise((res, rej) =>
@@ -193,17 +268,23 @@ export default function SpotDrop() {
       await loadGoogleMaps(GOOGLE_API_KEY);
       const service = new window.google.maps.places.PlacesService(document.createElement("div"));
 
+      // FIX: use singular `type` string — array form is deprecated and silently fails
       service.nearbySearch({
         location: { lat, lng },
         rankBy: window.google.maps.places.RankBy.DISTANCE,
-        type: ["restaurant", "bar", "cafe", "bakery", "night_club"],
+        type: "restaurant",
       }, (results, status) => {
         if (status === "OK" && results?.length) {
           const place = results[0];
+          const typeLabel = (place.types || [])
+            .filter(t => !["point_of_interest", "establishment", "food"].includes(t))
+            .slice(0, 2)
+            .map(t => t.replace(/_/g, " "))
+            .join(" • ");
           const spot = {
             id: place.place_id,
             name: place.name,
-            type: (place.types || []).slice(0, 2).map(t => t.replace(/_/g, " ")).join(" • "),
+            type: typeLabel || "Restaurant",
             address: place.vicinity,
             distance: "nearby",
             emoji: getEmoji(place.types),
@@ -224,7 +305,7 @@ export default function SpotDrop() {
     }
   }, []);
 
-  // ── Mock detection ───────────────────────────────────────────────────────
+  // ── Mock detection ─────────────────────────────────────────────────────────
   const detectMock = useCallback(() => {
     if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
     setGpsStatus("locating");
@@ -253,21 +334,21 @@ export default function SpotDrop() {
     const already = savedSpots.find(s => s.id === detected.id);
     if (already) {
       setAlreadySaved(true);
-      setTimeout(() => setAlreadySaved(false), 2000);
+      safeTimeout(() => setAlreadySaved(false), 2000);
       return;
     }
     setSaveAnim(true);
     const savedVibe = selectedVibe;
     const savedNote = note;
-    setTimeout(() => {
+    safeTimeout(() => {
       setSavedSpots(prev => [{ ...detected, savedAt: Date.now(), vibe: savedVibe, note: savedNote }, ...prev]);
       setDetected(null);
       setSaveAnim(false);
       setGpsStatus("idle");
       setJustSaved(true);
-      setTimeout(() => setJustSaved(false), 2500);
+      safeTimeout(() => setJustSaved(false), 2500);
     }, 600);
-  }, [detected, savedSpots, selectedVibe, note]);
+  }, [detected, savedSpots, selectedVibe, note, safeTimeout]);
 
   const skipSpot = useCallback(() => {
     setSaveAnim(false);
@@ -276,45 +357,23 @@ export default function SpotDrop() {
     setGpsStatus("idle");
   }, []);
 
-  const deleteSpot = (id) => {
+  const deleteSpot = useCallback((id) => {
     setSavedSpots(prev => prev.filter(s => s.id !== id));
     setSelectedSpot(null);
     setScreen("saved");
-  };
+  }, []);
+
+  // FIX: stable reference so MapView markers effect doesn't re-run on every render
+  const handleMapSpotClick = useCallback((spot) => {
+    setSelectedSpot(spot);
+    setScreen("detail");
+  }, []);
 
   const existingNeighborhoods = Array.from(new Set(savedSpots.map(s => s.neighborhood)));
   const neighborhoods = ["All", ...existingNeighborhoods];
   const activeFilter = existingNeighborhoods.includes(filter) ? filter : "All";
   const filteredSpots = activeFilter === "All" ? savedSpots : savedSpots.filter(s => s.neighborhood === activeFilter);
-
   const isDetecting = gpsStatus === "locating" || gpsStatus === "searching";
-
-  // ── Shared bottom nav ────────────────────────────────────────────────────
-  const NavBar = () => (
-    <div style={{
-      position: "fixed", bottom: 0, left: 0, right: 0,
-      background: "#0d0d0d", borderTop: "1px solid #1e1e1e",
-      display: "flex", padding: "10px 0 24px",
-      zIndex: 100,
-    }}>
-      {[
-        { id: "home", icon: "📍", label: "Pin" },
-        { id: "saved", icon: "🗒️", label: "List" },
-        { id: "map", icon: "🗺️", label: "Map" },
-        { id: "install", icon: "📱", label: "Install" },
-      ].map(tab => (
-        <button key={tab.id} onClick={() => setScreen(tab.id)} style={{
-          flex: 1, background: "none", border: "none", cursor: "pointer",
-          display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-          opacity: screen === tab.id ? 1 : 0.35,
-          transition: "opacity 0.2s",
-        }}>
-          <span style={{ fontSize: 22 }}>{tab.icon}</span>
-          <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: screen === tab.id ? "#e8c547" : "#888", letterSpacing: 0.5 }}>{tab.label}</span>
-        </button>
-      ))}
-    </div>
-  );
 
   return (
     <div style={{
@@ -362,7 +421,6 @@ export default function SpotDrop() {
         .vibe-pill:active { transform: scale(0.94); }
         .filter-chip { transition: all 0.15s; cursor: pointer; }
         textarea { resize: none; outline: none; }
-        .spinner { width: 18px; height: 18px; border: 2px solid #333; border-top-color: #e8c547; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
         .install-step { animation: slideUp 0.4s ease both; }
       `}</style>
 
@@ -401,9 +459,7 @@ export default function SpotDrop() {
           </div>
 
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 28px 20px" }}>
-
-            {/* Idle */}
-            {!isDetecting && !detected && (
+            {!isDetecting && !detected && gpsStatus !== "error" && (
               <div style={{ textAlign: "center", animation: "fadeIn 0.4s ease" }}>
                 <button className="detect-btn" onClick={detectSpot} style={{
                   width: 164, height: 164, borderRadius: "50%",
@@ -420,7 +476,6 @@ export default function SpotDrop() {
               </div>
             )}
 
-            {/* Detecting */}
             {isDetecting && (
               <div style={{ textAlign: "center", animation: "fadeIn 0.3s ease" }}>
                 <div style={{ position: "relative", width: 130, height: 130, margin: "0 auto 24px" }}>
@@ -433,18 +488,18 @@ export default function SpotDrop() {
                     display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34,
                   }}>📡</div>
                 </div>
-                <p style={{ fontFamily: "'DM Sans', sans-serif", color: "#555", fontSize: 13, letterSpacing: 0.5 }}>
+                <p style={{ fontFamily: "'DM Sans', sans-serif", color: "#555", fontSize: 13 }}>
                   {gpsStatus === "locating" ? "Getting your location..." : "Finding what's nearby..."}
                 </p>
               </div>
             )}
 
-            {/* GPS Error */}
             {gpsStatus === "error" && (
               <div style={{ textAlign: "center", animation: "fadeIn 0.3s ease", padding: "0 20px" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>⚠️</div>
                 <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#666", lineHeight: 1.7, marginBottom: 20 }}>
-                  Couldn't detect nearby spots.<br />Check your location permissions.
+                  Couldn't detect nearby spots.<br />
+                  {!navigator.geolocation ? "Location not supported on this browser." : "Check your location permissions in Settings."}
                 </p>
                 <button className="nav-btn" onClick={() => setGpsStatus("idle")} style={{
                   background: "#1a1a1a", border: "1px solid #2a2a2a",
@@ -454,7 +509,6 @@ export default function SpotDrop() {
               </div>
             )}
 
-            {/* Detected card */}
             {detected && !isDetecting && (
               <div className="detected-card" style={{ width: "100%", maxWidth: 360 }}>
                 <div style={{ background: "#141414", border: "1px solid #252525", borderRadius: 22, padding: 22, marginBottom: 14 }}>
@@ -509,11 +563,10 @@ export default function SpotDrop() {
               </div>
             )}
           </div>
-          <NavBar />
         </div>
       )}
 
-      {/* ── SAVED LIST ── */}
+      {/* ── SAVED ── */}
       {screen === "saved" && (
         <div style={{ minHeight: "100vh", paddingBottom: 80 }}>
           <div style={{ padding: "52px 28px 14px" }}>
@@ -563,24 +616,27 @@ export default function SpotDrop() {
               </div>
             ))}
           </div>
-          <NavBar />
         </div>
       )}
 
       {/* ── MAP ── */}
+      {/* FIX: use explicit height calculation so the map div gets real pixels */}
       {screen === "map" && (
-        <div style={{ height: "100vh", display: "flex", flexDirection: "column", paddingBottom: 80 }}>
-          <div style={{ padding: "52px 28px 16px" }}>
+        <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "52px 28px 16px", flexShrink: 0 }}>
             <div style={{ fontSize: 10, letterSpacing: 3, color: "#555", fontFamily: "'DM Sans', sans-serif", textTransform: "uppercase", marginBottom: 4 }}>Explore</div>
             <h1 style={{ fontSize: 32, fontStyle: "italic" }}>Your Map.</h1>
           </div>
-          <div style={{ flex: 1, padding: "0 18px", display: "flex", flexDirection: "column" }}>
-            <MapView
-              spots={savedSpots}
-              onSpotClick={(spot) => { setSelectedSpot(spot); setScreen("detail"); }}
-            />
+          <div style={{
+            flex: 1,
+            padding: "0 18px 90px",
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0, // FIX: critical — allows flex child to shrink below content size
+          }}>
+            <MapView spots={savedSpots} onSpotClick={handleMapSpotClick} />
           </div>
-          <NavBar />
+          <NavBar screen={screen} setScreen={setScreen} />
         </div>
       )}
 
@@ -599,7 +655,6 @@ export default function SpotDrop() {
             <h1 style={{ fontSize: 28, lineHeight: 1.2, marginBottom: 5 }}>{selectedSpot.name}</h1>
             <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", marginBottom: 3, textTransform: "capitalize" }}>{selectedSpot.type}</p>
             <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444", marginBottom: 22 }}>{selectedSpot.address}</p>
-
             <div style={{ display: "flex", gap: 10, marginBottom: 22, flexWrap: "wrap" }}>
               {selectedSpot.vibe && (
                 <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#888" }}>{selectedSpot.vibe}</span>
@@ -607,31 +662,26 @@ export default function SpotDrop() {
               <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📅 {formatDate(selectedSpot.savedAt)}</span>
               <span style={{ background: "#1a1a1a", border: "1px solid #252525", padding: "8px 14px", borderRadius: 20, fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>📍 {selectedSpot.neighborhood}</span>
             </div>
-
             {selectedSpot.note ? (
               <div style={{ background: "#141414", border: "1px solid #222", borderRadius: 16, padding: 18, marginBottom: 22 }}>
                 <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "#444", letterSpacing: 2.5, textTransform: "uppercase", marginBottom: 8 }}>Your note</p>
                 <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 15, color: "#888", lineHeight: 1.7 }}>{selectedSpot.note}</p>
               </div>
             ) : null}
-
-            {USING_REAL_API && selectedSpot.lat && (
+            {selectedSpot.lat && (
               <a href={`https://maps.google.com/?q=${selectedSpot.lat},${selectedSpot.lng}`} target="_blank" rel="noreferrer"
                 style={{
                   display: "block", width: "100%", padding: 14, borderRadius: 14, marginBottom: 12,
                   background: "#1a1a1a", border: "1px solid #2a2a2a", textAlign: "center",
-                  color: "#f5f0e8", fontFamily: "'DM Sans', sans-serif", fontSize: 14,
-                  textDecoration: "none",
+                  color: "#f5f0e8", fontFamily: "'DM Sans', sans-serif", fontSize: 14, textDecoration: "none",
                 }}>🗺️ Open in Google Maps</a>
             )}
-
             <button onClick={() => deleteSpot(selectedSpot.id)} style={{
               width: "100%", padding: 14, borderRadius: 14,
               background: "none", border: "1px solid #2a1414",
               color: "#5a2a2a", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
             }}>Remove spot</button>
           </div>
-          <NavBar />
         </div>
       )}
 
@@ -642,9 +692,7 @@ export default function SpotDrop() {
             <div style={{ fontSize: 10, letterSpacing: 3, color: "#555", fontFamily: "'DM Sans', sans-serif", textTransform: "uppercase", marginBottom: 4 }}>Get the app</div>
             <h1 style={{ fontSize: 32, fontStyle: "italic" }}>On your<br />iPhone.</h1>
           </div>
-
           <div style={{ padding: "0 28px" }}>
-            {/* API key status */}
             <div style={{
               background: USING_REAL_API ? "#0f1a0f" : "#1a150a",
               border: "1px solid " + (USING_REAL_API ? "#1a3a1a" : "#3a2a0a"),
@@ -658,64 +706,36 @@ export default function SpotDrop() {
                     {USING_REAL_API ? "Google API key active" : "Demo mode — no API key yet"}
                   </div>
                   <div style={{ color: "#555", fontSize: 12 }}>
-                    {USING_REAL_API ? "Real GPS detection is enabled 🎉" : "Paste your key at the top of spot-drop.jsx"}
+                    {USING_REAL_API ? "Real GPS detection is enabled 🎉" : "Add VITE_GOOGL_MAP to Vercel env vars"}
                   </div>
                 </div>
               </div>
             </div>
-
-            {/* Steps */}
             {[
-              {
-                n: "1", title: "Host the app",
-                body: "Upload spot-drop.jsx to a free host like Vercel or Netlify. Takes 2 minutes — just drag and drop.",
-                link: "https://vercel.com", linkLabel: "Open Vercel →",
-              },
-              {
-                n: "2", title: "Open it in Safari",
-                body: "On your iPhone, open Safari and go to your app's URL. It must be Safari — Chrome won't work for adding to home screen.",
-              },
-              {
-                n: "3", title: `Tap the Share button`,
-                body: `Hit the share icon (the box with an arrow) at the bottom of Safari.`,
-              },
-              {
-                n: "4", title: `"Add to Home Screen"`,
-                body: `Scroll down in the share sheet and tap "Add to Home Screen". Name it SpotDrop and tap Add.`,
-              },
-              {
-                n: "5", title: "Done! 🎉",
-                body: "SpotDrop now lives on your home screen. Tap it and it opens full-screen, no browser bar — just like a real app.",
-              },
+              { n: "1", title: "Open in Safari", body: "On your iPhone, go to your Vercel URL in Safari (not Chrome — Safari only for home screen install)." },
+              { n: "2", title: "Tap the Share button", body: "Hit the share icon at the bottom of Safari — it looks like a box with an arrow pointing up." },
+              { n: "3", title: '"Add to Home Screen"', body: 'Scroll the share sheet and tap "Add to Home Screen". Name it SpotDrop and tap Add.' },
+              { n: "4", title: "Done! 🎉", body: "SpotDrop lives on your home screen. Opens full-screen, no browser bar — just like a real app." },
             ].map((step, i) => (
-              <div key={step.n} className="install-step" style={{
-                display: "flex", gap: 16, marginBottom: 24,
-                animationDelay: `${i * 0.07}s`,
-              }}>
+              <div key={step.n} className="install-step" style={{ display: "flex", gap: 16, marginBottom: 24, animationDelay: `${i * 0.07}s` }}>
                 <div style={{
                   width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
                   background: "#e8c547", color: "#0a0a0a",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14,
-                  marginTop: 2,
+                  fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14, marginTop: 2,
                 }}>{step.n}</div>
                 <div>
                   <div style={{ fontSize: 18, marginBottom: 5 }}>{step.title}</div>
                   <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", lineHeight: 1.7 }}>{step.body}</p>
-                  {step.link && (
-                    <a href={step.link} target="_blank" rel="noreferrer" style={{
-                      display: "inline-block", marginTop: 8,
-                      fontFamily: "'DM Sans', sans-serif", fontSize: 13,
-                      color: "#e8c547", textDecoration: "none",
-                    }}>{step.linkLabel}</a>
-                  )}
                 </div>
               </div>
             ))}
           </div>
-          <NavBar />
         </div>
       )}
+
+      {/* NavBar rendered for all screens except map (map renders its own) */}
+      {screen !== "map" && <NavBar screen={screen} setScreen={setScreen} />}
     </div>
   );
 }
