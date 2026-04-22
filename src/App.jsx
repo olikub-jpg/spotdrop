@@ -236,160 +236,224 @@ function CandidateStack({ candidates, onPick, onCancel }) {
   const [index, setIndex] = useState(0);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [exitDir, setExitDir] = useState(null); // "left" | "right" | null
+  const [exitDir, setExitDir] = useState(null);
   const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  const axisRef = useRef(null);
 
   const current = candidates[index];
-  const next = candidates[index + 1];
+  const isFirst = index === 0;
   const isLast = index >= candidates.length;
 
-  const handleStart = (clientX) => {
-    setDragging(true);
-    startXRef.current = clientX;
+  // FIX: lazy photo — only build URL for the card currently visible (saves API quota)
+  const [photoSrc, setPhotoSrc] = useState(null);
+  const [photoLoading, setPhotoLoading] = useState(false);
+
+  useEffect(() => {
+    setPhotoSrc(null);
+    if (!current || !current.photoRef) return;
+    setPhotoLoading(true);
+    try {
+      const url = current.photoRef.getUrl({ maxWidth: 600, maxHeight: 400 });
+      setPhotoSrc(url);
+    } catch (e) {
+      setPhotoSrc(null);
+    }
+  }, [current]);
+
+  const resetDrag = () => {
+    setDragX(0);
+    setExitDir(null);
+    axisRef.current = null;
   };
-  const handleMove = (clientX) => {
+
+  const handleStart = (x, y) => {
+    setDragging(true);
+    startXRef.current = x;
+    startYRef.current = y;
+    axisRef.current = null;
+  };
+  const handleMove = (x, y) => {
     if (!dragging) return;
-    setDragX(clientX - startXRef.current);
+    const dx = x - startXRef.current;
+    const dy = y - startYRef.current;
+    if (!axisRef.current && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+      axisRef.current = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    }
+    if (axisRef.current === "x") setDragX(dx);
   };
   const handleEnd = () => {
     if (!dragging) return;
     setDragging(false);
     const threshold = 80;
     if (dragX > threshold) {
-      // Swipe right = pick this one
       setExitDir("right");
-      setTimeout(() => { onPick(current); }, 200);
+      setTimeout(() => onPick(current), 220);
     } else if (dragX < -threshold) {
-      // Swipe left = skip
       setExitDir("left");
-      setTimeout(() => {
-        setIndex(i => i + 1);
-        setDragX(0);
-        setExitDir(null);
-      }, 200);
+      setTimeout(() => { setIndex(i => i + 1); resetDrag(); }, 220);
     } else {
       setDragX(0);
+      axisRef.current = null;
     }
+  };
+
+  const goBack = () => {
+    if (isFirst) return;
+    setIndex(i => Math.max(0, i - 1));
+    resetDrag();
+  };
+  const goForward = () => {
+    setExitDir("left");
+    setTimeout(() => { setIndex(i => i + 1); resetDrag(); }, 220);
+  };
+  const goPick = () => {
+    setExitDir("right");
+    setTimeout(() => onPick(current), 220);
   };
 
   if (isLast) {
     return (
-      <div style={{ textAlign: "center", animation: "fadeIn 0.4s ease", padding: "0 20px" }}>
+      <div style={{ textAlign: "center", animation: "fadeIn 0.4s ease", padding: "0 20px", width: "100%", maxWidth: 360 }}>
         <div style={{ fontSize: 40, marginBottom: 12 }}>🤷</div>
         <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#666", lineHeight: 1.7, marginBottom: 20 }}>
-          That's all the nearby spots.<br />Nothing caught your eye?
+          That's all the nearby spots.<br />Want to go back or cancel?
         </p>
-        <button onClick={onCancel} style={{
-          background: "#1a1a1a", border: "1px solid #2a2a2a",
-          color: "#f5f0e8", borderRadius: 14, padding: "12px 24px",
-          fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
-        }}>Done</button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => setIndex(i => Math.max(0, i - 1))} style={{
+            flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a",
+            color: "#f5f0e8", borderRadius: 14, padding: "12px 20px",
+            fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+          }}>← Back</button>
+          <button onClick={onCancel} style={{
+            flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a",
+            color: "#888", borderRadius: 14, padding: "12px 20px",
+            fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+          }}>Done</button>
+        </div>
       </div>
     );
   }
 
   const rotation = dragX / 20;
-  const opacity = 1 - Math.min(Math.abs(dragX) / 200, 0.4);
+  const cardOpacity = 1 - Math.min(Math.abs(dragX) / 250, 0.4);
 
   let exitTransform = "";
-  if (exitDir === "right") exitTransform = "translateX(400px) rotate(20deg)";
-  if (exitDir === "left") exitTransform = "translateX(-400px) rotate(-20deg)";
+  if (exitDir === "right") exitTransform = "translateX(420px) rotate(22deg)";
+  else if (exitDir === "left") exitTransform = "translateX(-420px) rotate(-22deg)";
 
   return (
     <div style={{ width: "100%", maxWidth: 360, animation: "fadeIn 0.4s ease" }}>
-      <div style={{ textAlign: "center", marginBottom: 14 }}>
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase" }}>
-          {index + 1} of {candidates.length} nearby
-        </p>
+      {/* Header with back button + counter */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <button onClick={goBack} disabled={isFirst} style={{
+          background: "none", border: "1px solid " + (isFirst ? "#1a1a1a" : "#2a2a2a"),
+          borderRadius: 20, padding: "6px 12px",
+          fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+          color: isFirst ? "#333" : "#888",
+          cursor: isFirst ? "default" : "pointer",
+        }}>← Back</button>
+        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase" }}>
+          {index + 1} / {candidates.length}
+        </span>
+        <div style={{ width: 72 }} /> {/* spacer for symmetry */}
       </div>
 
-      {/* Card stack container */}
-      <div style={{ position: "relative", height: 220, marginBottom: 20 }}>
-        {/* Next card underneath, for depth */}
-        {next && (
-          <div style={{
-            position: "absolute", inset: 0,
-            background: "#0e0e0e", border: "1px solid #1e1e1e",
-            borderRadius: 22,
-            transform: "scale(0.95)", opacity: 0.5,
-          }} />
-        )}
-
-        {/* Current card */}
+      {/* Card */}
+      <div style={{ position: "relative", marginBottom: 16 }}>
         <div
-          onMouseDown={(e) => handleStart(e.clientX)}
-          onMouseMove={(e) => handleMove(e.clientX)}
+          onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
+          onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
           onMouseUp={handleEnd}
           onMouseLeave={handleEnd}
-          onTouchStart={(e) => handleStart(e.touches[0].clientX)}
-          onTouchMove={(e) => handleMove(e.touches[0].clientX)}
+          onTouchStart={(e) => handleStart(e.touches[0].clientX, e.touches[0].clientY)}
+          onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
           onTouchEnd={handleEnd}
           style={{
-            position: "absolute", inset: 0,
             background: "#141414", border: "1px solid #252525",
-            borderRadius: 22, padding: 22,
-            transform: exitDir
-              ? exitTransform
-              : `translateX(${dragX}px) rotate(${rotation}deg)`,
+            borderRadius: 22, overflow: "hidden",
+            transform: exitDir ? exitTransform : `translateX(${dragX}px) rotate(${rotation}deg)`,
             transition: dragging ? "none" : "transform 0.25s ease, opacity 0.2s ease",
-            opacity: exitDir ? 0 : opacity,
+            opacity: exitDir ? 0 : cardOpacity,
             cursor: dragging ? "grabbing" : "grab",
             userSelect: "none",
             touchAction: "pan-y",
+            position: "relative",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-            <span style={{ fontSize: 42 }}>{current.emoji}</span>
-            <span style={{ background: "#1e1e1e", padding: "4px 10px", borderRadius: 20, fontSize: 11, fontFamily: "'DM Sans', sans-serif", color: "#e8c547" }}>
-              {current.distance}
-            </span>
-          </div>
-          <h2 style={{ fontSize: 22, marginBottom: 4, lineHeight: 1.2 }}>{current.name}</h2>
-          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#666", marginBottom: 4, textTransform: "capitalize" }}>{current.type}</p>
-          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>{current.address}</p>
+          {/* Photo */}
+          <div style={{
+            width: "100%", height: 160,
+            background: "#0a0a0a",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            position: "relative", overflow: "hidden",
+          }}>
+            {photoSrc ? (
+              <img
+                src={photoSrc}
+                alt={current.name}
+                draggable={false}
+                style={{
+                  width: "100%", height: "100%",
+                  objectFit: "cover",
+                  pointerEvents: "none",
+                }}
+                onError={() => setPhotoSrc(null)}
+              />
+            ) : (
+              <div style={{ fontSize: 56, opacity: 0.3 }}>{current.emoji}</div>
+            )}
 
-          {/* Swipe hints */}
-          {dragX > 30 && (
-            <div style={{
-              position: "absolute", top: 20, left: 20,
-              border: "2px solid #4a9a4a", color: "#4a9a4a",
-              padding: "4px 12px", borderRadius: 8,
-              fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14,
-              transform: "rotate(-15deg)",
-              opacity: Math.min(dragX / 120, 1),
-            }}>✓ PICK</div>
-          )}
-          {dragX < -30 && (
-            <div style={{
-              position: "absolute", top: 20, right: 20,
-              border: "2px solid #9a4a4a", color: "#9a4a4a",
-              padding: "4px 12px", borderRadius: 8,
-              fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14,
-              transform: "rotate(15deg)",
-              opacity: Math.min(Math.abs(dragX) / 120, 1),
-            }}>✕ SKIP</div>
-          )}
+            {/* Swipe hints overlaid on the photo */}
+            {dragX > 30 && (
+              <div style={{
+                position: "absolute", top: 16, left: 16,
+                border: "3px solid #4a9a4a", color: "#4a9a4a",
+                padding: "6px 14px", borderRadius: 10,
+                fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 16,
+                transform: "rotate(-12deg)",
+                opacity: Math.min(dragX / 120, 1),
+                textShadow: "0 1px 4px rgba(0,0,0,0.6)",
+                background: "rgba(0,0,0,0.4)",
+              }}>✓ PICK</div>
+            )}
+            {dragX < -30 && (
+              <div style={{
+                position: "absolute", top: 16, right: 16,
+                border: "3px solid #c06060", color: "#c06060",
+                padding: "6px 14px", borderRadius: 10,
+                fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 16,
+                transform: "rotate(12deg)",
+                opacity: Math.min(Math.abs(dragX) / 120, 1),
+                textShadow: "0 1px 4px rgba(0,0,0,0.6)",
+                background: "rgba(0,0,0,0.4)",
+              }}>✕ SKIP</div>
+            )}
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <span style={{ fontSize: 32 }}>{current.emoji}</span>
+              <span style={{ background: "#1e1e1e", padding: "4px 10px", borderRadius: 20, fontSize: 11, fontFamily: "'DM Sans', sans-serif", color: "#e8c547" }}>
+                {current.distance}
+              </span>
+            </div>
+            <h2 style={{ fontSize: 20, marginBottom: 4, lineHeight: 1.2 }}>{current.name}</h2>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#666", marginBottom: 4, textTransform: "capitalize" }}>{current.type}</p>
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>{current.address}</p>
+          </div>
         </div>
       </div>
 
-      {/* Button controls (for people who don't swipe) */}
+      {/* Button controls */}
       <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-        <button onClick={() => {
-          setExitDir("left");
-          setTimeout(() => {
-            setIndex(i => i + 1);
-            setDragX(0);
-            setExitDir(null);
-          }, 200);
-        }} style={{
+        <button onClick={goForward} style={{
           flex: 1, padding: 14, borderRadius: 14,
           background: "#1a1a1a", border: "1px solid #2a2a2a",
           color: "#888", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
         }}>✕ Skip</button>
-        <button onClick={() => {
-          setExitDir("right");
-          setTimeout(() => onPick(current), 200);
-        }} style={{
+        <button onClick={goPick} style={{
           flex: 1, padding: 14, borderRadius: 14,
           background: "#e8c547", border: "none",
           color: "#0a0a0a", fontFamily: "'DM Sans', sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer",
@@ -403,9 +467,9 @@ function CandidateStack({ candidates, onPick, onCancel }) {
       }}>Cancel</button>
 
       <p style={{
-        textAlign: "center", marginTop: 10,
+        textAlign: "center", marginTop: 6,
         fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#333",
-      }}>Swipe left to skip, right to pick</p>
+      }}>Swipe left/right • Tap Back to revisit</p>
     </div>
   );
 }
@@ -475,6 +539,9 @@ export default function SpotDrop() {
       .slice(0, 2)
       .map(t => t.replace(/_/g, " "))
       .join(" • ");
+    // FIX: store the photo REFERENCE (not URL) — URL is built lazily when the card is shown
+    // This saves API photo-fetch quota: only cards actually viewed load an image
+    const photoRef = place.photos?.[0] || null;
     return {
       id: place.place_id,
       name: place.name,
@@ -486,6 +553,7 @@ export default function SpotDrop() {
       neighborhood: place.vicinity?.split(",").pop()?.trim() || "NYC",
       lat: placeLat,
       lng: placeLng,
+      photoRef,
     };
   }, []);
 
@@ -598,7 +666,20 @@ export default function SpotDrop() {
     const savedVibe = selectedVibe;
     const savedNote = note;
     safeTimeout(() => {
-      setSavedSpots(prev => [{ ...detected, savedAt: Date.now(), vibe: savedVibe, note: savedNote }, ...prev]);
+      // FIX: resolve photo URL at save time (photoRef is a live object that won't survive localStorage)
+      let resolvedPhotoUrl = detected.photoUrl || null;
+      if (!resolvedPhotoUrl && detected.photoRef) {
+        try { resolvedPhotoUrl = detected.photoRef.getUrl({ maxWidth: 800, maxHeight: 500 }); } catch {}
+      }
+      const spotToSave = {
+        ...detected,
+        savedAt: Date.now(),
+        vibe: savedVibe,
+        note: savedNote,
+        photoUrl: resolvedPhotoUrl,
+        photoRef: undefined, // strip live ref before persisting
+      };
+      setSavedSpots(prev => [spotToSave, ...prev]);
       setDetected(null);
       setSaveAnim(false);
       setGpsStatus("idle");
@@ -918,6 +999,18 @@ export default function SpotDrop() {
             }}>← Back</button>
           </div>
           <div style={{ padding: "0 28px 40px" }}>
+            {selectedSpot.photoUrl && (
+              <div style={{
+                width: "100%", height: 180,
+                borderRadius: 18, overflow: "hidden",
+                marginBottom: 18, background: "#141414",
+              }}>
+                <img src={selectedSpot.photoUrl} alt={selectedSpot.name}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  onError={(e) => { e.target.style.display = "none"; }}
+                />
+              </div>
+            )}
             <div style={{ fontSize: 58, marginBottom: 16 }}>{selectedSpot.emoji}</div>
             <h1 style={{ fontSize: 28, lineHeight: 1.2, marginBottom: 5 }}>{selectedSpot.name}</h1>
             <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", marginBottom: 3, textTransform: "capitalize" }}>{selectedSpot.type}</p>
