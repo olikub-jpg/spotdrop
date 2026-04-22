@@ -32,6 +32,23 @@ function getNextMock(lastId) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+// FIX: Haversine distance — exact meters between two GPS points
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function formatDistance(m) {
+  if (m < 15) return "right here";
+  if (m < 100) return `${Math.round(m)}m away`;
+  return `${(m / 1000).toFixed(1)}km away`;
+}
+
 // FIX: use global callback pattern — most reliable on mobile Safari
 function loadGoogleMaps(apiKey) {
   return new Promise((resolve, reject) => {
@@ -230,6 +247,7 @@ export default function SpotDrop() {
   const [alreadySaved, setAlreadySaved] = useState(false);
   const [filter, setFilter] = useState("All");
   const [gpsStatus, setGpsStatus] = useState("idle");
+  const [candidates, setCandidates] = useState([]); // FIX: list of nearby places to pick from
 
   const detectTimerRef = useRef(null);
   const lastDetectedIdRef = useRef(null);
@@ -251,24 +269,32 @@ export default function SpotDrop() {
   }, []);
 
   // ── Helper to build a spot from a Places result ───────────────────────────
-  const handlePlaceResult = useCallback((place) => {
+  const buildSpot = useCallback((place, userLat, userLng) => {
+    const placeLat = place.geometry.location.lat();
+    const placeLng = place.geometry.location.lng();
+    const meters = distanceMeters(userLat, userLng, placeLat, placeLng);
     const typeLabel = (place.types || [])
       .filter(t => !["point_of_interest", "establishment", "food"].includes(t))
       .slice(0, 2)
       .map(t => t.replace(/_/g, " "))
       .join(" • ");
-    const spot = {
+    return {
       id: place.place_id,
       name: place.name,
       type: typeLabel || "Restaurant",
       address: place.vicinity,
-      distance: "nearby",
+      distance: formatDistance(meters),
+      distanceMeters: meters,
       emoji: getEmoji(place.types),
       neighborhood: place.vicinity?.split(",").pop()?.trim() || "NYC",
-      lat: place.geometry.location.lat(),
-      lng: place.geometry.location.lng(),
+      lat: placeLat,
+      lng: placeLng,
     };
+  }, []);
+
+  const selectCandidate = useCallback((spot) => {
     setDetected(spot);
+    setCandidates([]);
     setGpsStatus("done");
     setSelectedVibe(null);
     setNote("");
@@ -278,18 +304,23 @@ export default function SpotDrop() {
   const detectReal = useCallback(async () => {
     setGpsStatus("locating");
     setDetected(null);
+    setCandidates([]);
     setSaveAnim(false);
     setAlreadySaved(false);
 
-    // FIX: check geolocation availability before calling it
     if (!navigator.geolocation) {
       setGpsStatus("error");
       return;
     }
 
     try {
+      // FIX: enableHighAccuracy for much better precision
       const pos = await new Promise((res, rej) =>
-        navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000, maximumAge: 10000 })
+        navigator.geolocation.getCurrentPosition(res, rej, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        })
       );
       const { latitude: lat, longitude: lng } = pos.coords;
       setGpsStatus("searching");
@@ -297,33 +328,49 @@ export default function SpotDrop() {
       await loadGoogleMaps(GOOGLE_API_KEY);
       const service = new window.google.maps.places.PlacesService(document.createElement("div"));
 
-      // FIX: radius-based search is reliable; rankBy:DISTANCE requires a keyword and hangs without one
-      service.nearbySearch({
-        location: { lat, lng },
-        radius: 150, // 150 meters — close enough to catch what you're walking by
-        type: "restaurant",
-      }, (results, status) => {
-        // If no restaurants in 150m, widen to bars/cafes
-        if ((!results?.length || status !== "OK")) {
-          service.nearbySearch({
-            location: { lat, lng },
-            radius: 300,
-            keyword: "bar cafe restaurant",
-          }, (results2, status2) => {
-            if (status2 === "OK" && results2?.length) {
-              handlePlaceResult(results2[0]);
-            } else {
-              setGpsStatus("error");
-            }
-          });
-          return;
+      const runSearch = (radius, onDone) => {
+        service.nearbySearch({
+          location: { lat, lng },
+          radius,
+          type: "restaurant",
+        }, (results, status) => {
+          if (status === "OK" && results?.length) {
+            onDone(results);
+          } else {
+            // Widen to bars/cafes
+            service.nearbySearch({
+              location: { lat, lng },
+              radius: radius * 2,
+              keyword: "bar cafe restaurant bakery",
+            }, (results2, status2) => {
+              if (status2 === "OK" && results2?.length) onDone(results2);
+              else onDone([]);
+            });
+          }
+        });
+      };
+
+      runSearch(40, (results) => {
+        if (!results.length) { setGpsStatus("error"); return; }
+        // FIX: sort by actual distance from user (Places API doesn't guarantee order)
+        const spots = results
+          .map(p => buildSpot(p, lat, lng))
+          .sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+        const closest = spots[0];
+        // If closest is super close (<20m), just auto-select it
+        if (closest.distanceMeters < 20) {
+          selectCandidate(closest);
+        } else {
+          // Otherwise show top 5 options to pick from
+          setCandidates(spots.slice(0, 5));
+          setGpsStatus("done");
         }
-        handlePlaceResult(results[0]);
       });
     } catch (e) {
       setGpsStatus("error");
     }
-  }, [handlePlaceResult]);
+  }, [buildSpot, selectCandidate]);
 
   // ── Mock detection ─────────────────────────────────────────────────────────
   const detectMock = useCallback(() => {
@@ -373,6 +420,7 @@ export default function SpotDrop() {
   const skipSpot = useCallback(() => {
     setSaveAnim(false);
     setDetected(null);
+    setCandidates([]);
     setAlreadySaved(false);
     setGpsStatus("idle");
   }, []);
@@ -479,7 +527,7 @@ export default function SpotDrop() {
           </div>
 
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 28px 20px" }}>
-            {!isDetecting && !detected && gpsStatus !== "error" && (
+            {!isDetecting && !detected && !candidates.length && gpsStatus !== "error" && (
               <div style={{ textAlign: "center", animation: "fadeIn 0.4s ease" }}>
                 <button className="detect-btn" onClick={detectSpot} style={{
                   width: 164, height: 164, borderRadius: "50%",
@@ -526,6 +574,54 @@ export default function SpotDrop() {
                   color: "#f5f0e8", borderRadius: 14, padding: "12px 24px",
                   fontFamily: "'DM Sans', sans-serif", fontSize: 14,
                 }}>Try again</button>
+              </div>
+            )}
+
+            {/* FIX: Multiple candidates within 40m — let user pick the right one */}
+            {candidates.length > 0 && !detected && !isDetecting && (
+              <div style={{ width: "100%", maxWidth: 360, animation: "fadeIn 0.4s ease" }}>
+                <div style={{ textAlign: "center", marginBottom: 18 }}>
+                  <div style={{ fontSize: 34, marginBottom: 8 }}>🎯</div>
+                  <h2 style={{ fontSize: 20, marginBottom: 4 }}>Which one?</h2>
+                  <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#555" }}>
+                    Closest spots to you
+                  </p>
+                </div>
+
+                {candidates.map((c, i) => (
+                  <button key={c.id} onClick={() => selectCandidate(c)} style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    width: "100%", background: "#141414",
+                    border: "1px solid #252525", borderRadius: 14,
+                    padding: "12px 14px", marginBottom: 8,
+                    cursor: "pointer", textAlign: "left",
+                    animation: `slideUp 0.3s ease ${i * 0.05}s both`,
+                  }}>
+                    <span style={{ fontSize: 24, flexShrink: 0 }}>{c.emoji}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontFamily: "'DM Serif Display', Georgia, serif",
+                        fontSize: 16, color: "#f5f0e8",
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      }}>{c.name}</div>
+                      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", marginTop: 2, textTransform: "capitalize" }}>
+                        {c.type}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                      color: "#e8c547", background: "#1e1e1e",
+                      padding: "4px 10px", borderRadius: 20, flexShrink: 0,
+                    }}>{c.distance}</span>
+                  </button>
+                ))}
+
+                <button onClick={skipSpot} style={{
+                  width: "100%", marginTop: 8, padding: 12, borderRadius: 14,
+                  background: "none", border: "1px solid #222",
+                  color: "#444", fontFamily: "'DM Sans', sans-serif", fontSize: 13,
+                  cursor: "pointer",
+                }}>None of these — cancel</button>
               </div>
             )}
 
