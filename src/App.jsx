@@ -231,6 +231,185 @@ const MapView = memo(function MapView({ spots, onSpotClick }) {
   );
 });
 
+// ─── SWIPEABLE CANDIDATE STACK ─────────────────────────────────────────────────
+function CandidateStack({ candidates, onPick, onCancel }) {
+  const [index, setIndex] = useState(0);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [exitDir, setExitDir] = useState(null); // "left" | "right" | null
+  const startXRef = useRef(0);
+
+  const current = candidates[index];
+  const next = candidates[index + 1];
+  const isLast = index >= candidates.length;
+
+  const handleStart = (clientX) => {
+    setDragging(true);
+    startXRef.current = clientX;
+  };
+  const handleMove = (clientX) => {
+    if (!dragging) return;
+    setDragX(clientX - startXRef.current);
+  };
+  const handleEnd = () => {
+    if (!dragging) return;
+    setDragging(false);
+    const threshold = 80;
+    if (dragX > threshold) {
+      // Swipe right = pick this one
+      setExitDir("right");
+      setTimeout(() => { onPick(current); }, 200);
+    } else if (dragX < -threshold) {
+      // Swipe left = skip
+      setExitDir("left");
+      setTimeout(() => {
+        setIndex(i => i + 1);
+        setDragX(0);
+        setExitDir(null);
+      }, 200);
+    } else {
+      setDragX(0);
+    }
+  };
+
+  if (isLast) {
+    return (
+      <div style={{ textAlign: "center", animation: "fadeIn 0.4s ease", padding: "0 20px" }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>🤷</div>
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#666", lineHeight: 1.7, marginBottom: 20 }}>
+          That's all the nearby spots.<br />Nothing caught your eye?
+        </p>
+        <button onClick={onCancel} style={{
+          background: "#1a1a1a", border: "1px solid #2a2a2a",
+          color: "#f5f0e8", borderRadius: 14, padding: "12px 24px",
+          fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+        }}>Done</button>
+      </div>
+    );
+  }
+
+  const rotation = dragX / 20;
+  const opacity = 1 - Math.min(Math.abs(dragX) / 200, 0.4);
+
+  let exitTransform = "";
+  if (exitDir === "right") exitTransform = "translateX(400px) rotate(20deg)";
+  if (exitDir === "left") exitTransform = "translateX(-400px) rotate(-20deg)";
+
+  return (
+    <div style={{ width: "100%", maxWidth: 360, animation: "fadeIn 0.4s ease" }}>
+      <div style={{ textAlign: "center", marginBottom: 14 }}>
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", letterSpacing: 2, textTransform: "uppercase" }}>
+          {index + 1} of {candidates.length} nearby
+        </p>
+      </div>
+
+      {/* Card stack container */}
+      <div style={{ position: "relative", height: 220, marginBottom: 20 }}>
+        {/* Next card underneath, for depth */}
+        {next && (
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "#0e0e0e", border: "1px solid #1e1e1e",
+            borderRadius: 22,
+            transform: "scale(0.95)", opacity: 0.5,
+          }} />
+        )}
+
+        {/* Current card */}
+        <div
+          onMouseDown={(e) => handleStart(e.clientX)}
+          onMouseMove={(e) => handleMove(e.clientX)}
+          onMouseUp={handleEnd}
+          onMouseLeave={handleEnd}
+          onTouchStart={(e) => handleStart(e.touches[0].clientX)}
+          onTouchMove={(e) => handleMove(e.touches[0].clientX)}
+          onTouchEnd={handleEnd}
+          style={{
+            position: "absolute", inset: 0,
+            background: "#141414", border: "1px solid #252525",
+            borderRadius: 22, padding: 22,
+            transform: exitDir
+              ? exitTransform
+              : `translateX(${dragX}px) rotate(${rotation}deg)`,
+            transition: dragging ? "none" : "transform 0.25s ease, opacity 0.2s ease",
+            opacity: exitDir ? 0 : opacity,
+            cursor: dragging ? "grabbing" : "grab",
+            userSelect: "none",
+            touchAction: "pan-y",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+            <span style={{ fontSize: 42 }}>{current.emoji}</span>
+            <span style={{ background: "#1e1e1e", padding: "4px 10px", borderRadius: 20, fontSize: 11, fontFamily: "'DM Sans', sans-serif", color: "#e8c547" }}>
+              {current.distance}
+            </span>
+          </div>
+          <h2 style={{ fontSize: 22, marginBottom: 4, lineHeight: 1.2 }}>{current.name}</h2>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#666", marginBottom: 4, textTransform: "capitalize" }}>{current.type}</p>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#444" }}>{current.address}</p>
+
+          {/* Swipe hints */}
+          {dragX > 30 && (
+            <div style={{
+              position: "absolute", top: 20, left: 20,
+              border: "2px solid #4a9a4a", color: "#4a9a4a",
+              padding: "4px 12px", borderRadius: 8,
+              fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14,
+              transform: "rotate(-15deg)",
+              opacity: Math.min(dragX / 120, 1),
+            }}>✓ PICK</div>
+          )}
+          {dragX < -30 && (
+            <div style={{
+              position: "absolute", top: 20, right: 20,
+              border: "2px solid #9a4a4a", color: "#9a4a4a",
+              padding: "4px 12px", borderRadius: 8,
+              fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 14,
+              transform: "rotate(15deg)",
+              opacity: Math.min(Math.abs(dragX) / 120, 1),
+            }}>✕ SKIP</div>
+          )}
+        </div>
+      </div>
+
+      {/* Button controls (for people who don't swipe) */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <button onClick={() => {
+          setExitDir("left");
+          setTimeout(() => {
+            setIndex(i => i + 1);
+            setDragX(0);
+            setExitDir(null);
+          }, 200);
+        }} style={{
+          flex: 1, padding: 14, borderRadius: 14,
+          background: "#1a1a1a", border: "1px solid #2a2a2a",
+          color: "#888", fontFamily: "'DM Sans', sans-serif", fontSize: 14, cursor: "pointer",
+        }}>✕ Skip</button>
+        <button onClick={() => {
+          setExitDir("right");
+          setTimeout(() => onPick(current), 200);
+        }} style={{
+          flex: 1, padding: 14, borderRadius: 14,
+          background: "#e8c547", border: "none",
+          color: "#0a0a0a", fontFamily: "'DM Sans', sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer",
+        }}>📍 This one</button>
+      </div>
+
+      <button onClick={onCancel} style={{
+        width: "100%", padding: 10, borderRadius: 14,
+        background: "none", border: "none",
+        color: "#444", fontFamily: "'DM Sans', sans-serif", fontSize: 12, cursor: "pointer",
+      }}>Cancel</button>
+
+      <p style={{
+        textAlign: "center", marginTop: 10,
+        fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#333",
+      }}>Swipe left to skip, right to pick</p>
+    </div>
+  );
+}
+
 // ─── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function SpotDrop() {
   const [screen, setScreen] = useState("home");
@@ -350,22 +529,15 @@ export default function SpotDrop() {
         });
       };
 
-      runSearch(40, (results) => {
+      runSearch(80, (results) => {
         if (!results.length) { setGpsStatus("error"); return; }
-        // FIX: sort by actual distance from user (Places API doesn't guarantee order)
+        // Sort by actual distance and take top 10 — user can swipe through
         const spots = results
           .map(p => buildSpot(p, lat, lng))
-          .sort((a, b) => a.distanceMeters - b.distanceMeters);
-
-        const closest = spots[0];
-        // If closest is super close (<20m), just auto-select it
-        if (closest.distanceMeters < 20) {
-          selectCandidate(closest);
-        } else {
-          // Otherwise show top 5 options to pick from
-          setCandidates(spots.slice(0, 5));
-          setGpsStatus("done");
-        }
+          .sort((a, b) => a.distanceMeters - b.distanceMeters)
+          .slice(0, 10);
+        setCandidates(spots);
+        setGpsStatus("done");
       });
     } catch (e) {
       setGpsStatus("error");
@@ -577,52 +749,13 @@ export default function SpotDrop() {
               </div>
             )}
 
-            {/* FIX: Multiple candidates within 40m — let user pick the right one */}
+            {/* Swipeable card stack — one at a time, swipe/skip through nearby spots */}
             {candidates.length > 0 && !detected && !isDetecting && (
-              <div style={{ width: "100%", maxWidth: 360, animation: "fadeIn 0.4s ease" }}>
-                <div style={{ textAlign: "center", marginBottom: 18 }}>
-                  <div style={{ fontSize: 34, marginBottom: 8 }}>🎯</div>
-                  <h2 style={{ fontSize: 20, marginBottom: 4 }}>Which one?</h2>
-                  <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#555" }}>
-                    Closest spots to you
-                  </p>
-                </div>
-
-                {candidates.map((c, i) => (
-                  <button key={c.id} onClick={() => selectCandidate(c)} style={{
-                    display: "flex", alignItems: "center", gap: 12,
-                    width: "100%", background: "#141414",
-                    border: "1px solid #252525", borderRadius: 14,
-                    padding: "12px 14px", marginBottom: 8,
-                    cursor: "pointer", textAlign: "left",
-                    animation: `slideUp 0.3s ease ${i * 0.05}s both`,
-                  }}>
-                    <span style={{ fontSize: 24, flexShrink: 0 }}>{c.emoji}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontFamily: "'DM Serif Display', Georgia, serif",
-                        fontSize: 16, color: "#f5f0e8",
-                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                      }}>{c.name}</div>
-                      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#555", marginTop: 2, textTransform: "capitalize" }}>
-                        {c.type}
-                      </div>
-                    </div>
-                    <span style={{
-                      fontFamily: "'DM Sans', sans-serif", fontSize: 11,
-                      color: "#e8c547", background: "#1e1e1e",
-                      padding: "4px 10px", borderRadius: 20, flexShrink: 0,
-                    }}>{c.distance}</span>
-                  </button>
-                ))}
-
-                <button onClick={skipSpot} style={{
-                  width: "100%", marginTop: 8, padding: 12, borderRadius: 14,
-                  background: "none", border: "1px solid #222",
-                  color: "#444", fontFamily: "'DM Sans', sans-serif", fontSize: 13,
-                  cursor: "pointer",
-                }}>None of these — cancel</button>
-              </div>
+              <CandidateStack
+                candidates={candidates}
+                onPick={selectCandidate}
+                onCancel={skipSpot}
+              />
             )}
 
             {detected && !isDetecting && (
