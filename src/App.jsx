@@ -808,10 +808,16 @@ export default function SpotDrop() {
               </div>
               <h1 style={{ fontSize: 34, lineHeight: 1.1, fontStyle: "italic" }}>Drop<br />a Spot.</h1>
             </div>
-            <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#555", textAlign: "right", marginTop: 4 }}>
-              <div style={{ fontSize: 22, marginBottom: 2 }}>📍</div>
+            <button onClick={() => setScreen("saved")} className="nav-btn" style={{
+              background: "none", border: "1px solid #222",
+              borderRadius: 14, padding: "8px 14px",
+              fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#888",
+              textAlign: "right", marginTop: 4, cursor: "pointer",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+            }}>
+              <div style={{ fontSize: 22 }}>📍</div>
               <div>{savedSpots.length} saved</div>
-            </div>
+            </button>
           </div>
 
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 28px 20px" }}>
@@ -1046,7 +1052,13 @@ export default function SpotDrop() {
               </div>
             ) : null}
             {selectedSpot.lat && (
-              <a href={`https://maps.google.com/?q=${selectedSpot.lat},${selectedSpot.lng}`} target="_blank" rel="noreferrer"
+              <a href={
+                // FIX: send to the restaurant's Maps page, not just a coordinate pin.
+                // Uses name + address as query and place_id as target when available.
+                selectedSpot.id && typeof selectedSpot.id === "string" && selectedSpot.id.startsWith("Ch")
+                  ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedSpot.name + " " + (selectedSpot.address || ""))}&query_place_id=${selectedSpot.id}`
+                  : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedSpot.name + " " + (selectedSpot.address || ""))}`
+              } target="_blank" rel="noreferrer"
                 style={{
                   display: "block", width: "100%", padding: 14, borderRadius: 14, marginBottom: 12,
                   background: "#1a1a1a", border: "1px solid #2a2a2a", textAlign: "center",
